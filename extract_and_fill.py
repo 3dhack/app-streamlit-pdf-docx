@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix15
+# extract_and_fill.py — fix16
 import re
 import unicodedata
 from io import BytesIO
@@ -258,6 +258,20 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                     for variant in (f"« {key} »", f"«\xa0{key}\xa0»"):
                         _replace_in_paragraph(p, variant, str(val))
 
+def strip_facture_titles(doc: Document):
+    """Ensure any paragraph/header/footer starting with 'Facture' keeps only the word 'Facture'."""
+    def clean_para(p):
+        txt = p.text.strip()
+        if txt.startswith("Facture"):
+            p.clear()
+            p.add_run("Facture")
+    for p in doc.paragraphs:
+        clean_para(p)
+    for section in doc.sections:
+        for hdr in (section.header, section.footer):
+            for p in hdr.paragraphs:
+                clean_para(p)
+
 def find_paragraph_anchor(doc: Document) -> Optional[object]:
     target_re = re.compile(r"cond\.\s*de\s*paiement[s]?", re.IGNORECASE)
     for p in doc.paragraphs:
@@ -266,10 +280,12 @@ def find_paragraph_anchor(doc: Document) -> Optional[object]:
     return None
 
 def set_table_borders(table):
+    """Set visible borders on table AND each cell (more robust)."""
     try:
         table.style = "Table Grid"
     except Exception:
         pass
+    # Table borders
     tbl = table._element
     tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement('w:tblPr')
     tblBorders = OxmlElement('w:tblBorders')
@@ -282,6 +298,24 @@ def set_table_borders(table):
         tblBorders.append(element)
     tblPr.append(tblBorders)
     tbl.append(tblPr)
+    # Cell borders as fallback
+    for row in table.rows:
+        for cell in row.cells:
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            tcBorders = tcPr.find(qn('w:tcBorders'))
+            if tcBorders is None:
+                tcBorders = OxmlElement('w:tcBorders')
+                tcPr.append(tcBorders)
+            for edge in ('top', 'left', 'bottom', 'right'):
+                el = tcBorders.find(qn(f'w:{edge}'))
+                if el is None:
+                    el = OxmlElement(f'w:{edge}')
+                    tcBorders.append(el)
+                el.set(qn('w:val'), 'single')
+                el.set(qn('w:sz'), '8')
+                el.set(qn('w:space'), '0')
+                el.set(qn('w:color'), 'auto')
 
 def apply_column_widths_and_alignments(table):
     try:
@@ -295,9 +329,9 @@ def apply_column_widths_and_alignments(table):
     # Preferred widths
     widths_in = {}
     if "Pos" in idx: widths_in[idx["Pos"]] = Inches(0.5)
-    if "Désignation" in idx: widths_in[idx["Désignation"]] = Inches(4.5)
-    if "Qté" in idx: widths_in[idx["Qté"]] = Inches(0.8)
-    # Apply widths
+    if "Désignation" in idx: widths_in[idx["Désignation"]] = Inches(4.7)  # widen
+    if "Qté" in idx: widths_in[idx["Qté"]] = Inches(0.8)  # narrow and centered
+    # Apply widths + alignment
     for r in table.rows:
         for j, cell in enumerate(r.cells):
             if j in widths_in:
@@ -308,10 +342,9 @@ def apply_column_widths_and_alignments(table):
                     tcW.set(qn('w:type'), 'dxa')
                     dxa = int(widths_in[j].inches * 1440)
                     tcW.set(qn('w:w'), str(dxa))
-            # Alignment rules
             for p in cell.paragraphs:
-                # Header row
-                if r is table.rows[0]:
+                is_header = (r is table.rows[0])
+                if is_header:
                     p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                     if p.runs: p.runs[0].bold = True
                 else:
@@ -417,7 +450,9 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
                 except Exception:
                     pass
     if from_text:
-        fields["Délai de réception"] = max(from_text).strftime("%d.%m.%Y")
+        max_dt = max(from_text).strftime("%d.%m.%Y")
+        fields["Délai de réception"] = max_dt
+        fields["Délai de livraison"] = max_dt  # alias for Word placeholder
 
     # Items table
     if tables:
@@ -427,9 +462,11 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
         items_df = reconstruct_items_from_text(text)
         items_df = clean_items_df_keep_full(items_df)
 
-    # Replace placeholders only; table & total added later
+    # Replace placeholders and then normalize titles
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
+    strip_facture_titles(doc)
+
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue(), fields, items_df
 

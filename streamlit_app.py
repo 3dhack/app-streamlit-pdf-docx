@@ -1,4 +1,4 @@
-# streamlit_app.py — fix15 UI
+# streamlit_app.py — fix16 UI
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -11,7 +11,7 @@ from extract_and_fill import (
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Référence à gauche, Qté centré et étroite, Désignation élargie. Total TTC CHF sous le tableau + 2 retours à la ligne.")
+st.caption("Bordures renforcées, 'Livré le' alimenté, titre 'Facture' épuré.")
 
 with st.sidebar:
     st.header("Étapes")
@@ -59,6 +59,7 @@ if fields:
         "Notre référence": fields.get("Notre référence", ""),
         "date du jour": fields.get("date du jour", ""),
         "Délai de réception": fields.get("Délai de réception", ""),
+        "Délai de livraison": fields.get("Délai de livraison", ""),
         "Total TTC CHF": fields.get("Total TTC CHF", ""),
     })
 
