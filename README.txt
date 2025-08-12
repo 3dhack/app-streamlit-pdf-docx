@@ -1,11 +1,9 @@
-# PDF → DOCX (Streamlit) — fix 2 (parsing robuste)
-
-- Parsing **insensible aux accents** (commande fournisseur, délai, etc.)
-- Gestion du **Total TTC** même si le **nombre précède le libellé**
-- Normalisation espaces (cas comme `1'347.36Montant`)
-- Auto-préremplissage, éditeur de tableau, génération robuste
+# PDF → DOCX (Streamlit) — fix3
+- Champ renommé : **« Délai de livraison »**
+- La valeur est calculée comme **la plus grande date trouvée dans le tableau** du PDF (format dd.mm.yyyy)
+- Préremplissage auto, édition du tableau, génération robuste
 
 ## Déploiement
-1) Pousse ces fichiers dans ton repo GitHub public
+1) Remplace tes fichiers dans le repo GitHub (commit + push)
 2) Streamlit Cloud redéploie
-3) Test en direct puis intégration WordPress (?embed=true)
+3) Vérifie que « Délai de livraison » est prérempli

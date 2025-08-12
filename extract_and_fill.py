@@ -1,9 +1,10 @@
-# extract_and_fill.py — robust parsing
+# extract_and_fill.py — fix3: "Délai de livraison" = max date found in PDF tables
 import re
 import unicodedata
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Tuple, Optional
+from datetime import datetime
 
 import pdfplumber
 import pandas as pd
@@ -13,6 +14,8 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
 EXPECTED_COLUMNS = ["Pos.", "Référence", "Désignation", "Qté", "Prix unit.", "Total CHF"]
 
+DATE_RE = re.compile(r"\b([0-3]?\d)[./-]([01]?\d)[./-]([12]\d{3})\b")
+
 def _strip_accents(s: str) -> str:
     return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
 
@@ -20,11 +23,19 @@ def _norm_spaces(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 def _insert_missing_spaces(text: str) -> str:
-    # e.g. "1'347.36Montant" -> "1'347.36 Montant"
     text = re.sub(r"(\d)[A-Za-z]", lambda m: m.group(0)[0] + " " + m.group(0)[1:], text)
-    # e.g., "23.40PC235490" -> "23.40 PC235490"
     text = re.sub(r"(\d)(PC\d{3,})", r"\1 \2", text)
     return text
+
+def _parse_date_str(s: str) -> Optional[datetime]:
+    m = DATE_RE.search(s)
+    if not m:
+        return None
+    d, mth, y = m.groups()
+    try:
+        return datetime(int(y), int(mth), int(d))
+    except ValueError:
+        return None
 
 def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]]:
     texts = []
@@ -34,8 +45,6 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
             raw_text = page.extract_text() or ""
             raw_text = _insert_missing_spaces(raw_text)
             texts.append(raw_text)
-
-            # collect tables
             try:
                 for raw in page.extract_tables() or []:
                     if not raw or len(raw) < 1:
@@ -47,7 +56,7 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
                         header = [f"Col{i+1}" for i in range(ncols)]
                     df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
                     df = _clean_df(df)
-                    if df.shape[1] >= 3 and df.shape[0] >= 1:
+                    if df.shape[1] >= 2 and df.shape[0] >= 1:
                         tables.append(df)
             except Exception:
                 pass
@@ -61,11 +70,10 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
                         header = [f"Col{i+1}" for i in range(ncols)]
                     df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
                     df = _clean_df(df)
-                    if df.shape[1] >= 3 and df.shape[0] >= 1:
+                    if df.shape[1] >= 2 and df.shape[0] >= 1:
                         tables.append(df)
             except Exception:
                 pass
-
     # de-duplicate
     unique = []
     sigs = set()
@@ -74,7 +82,6 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
         if sig not in sigs:
             sigs.add(sig)
             unique.append(df)
-
     full_text = "\n".join(texts)
     return full_text, unique
 
@@ -86,37 +93,24 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
-    """
-    Robust parser: accent-insensitive & both 'label before number' and 'number before label' for totals.
-    Picks the latest delivery deadline found (common in line items).
-    """
     fields: Dict[str, str] = {}
-    t0 = text
-    t1 = _strip_accents(t0)
-    t1 = _norm_spaces(t1)
+    t1 = _strip_accents(_norm_spaces(text))
 
-    # Commande fournisseur N° CF-25-05259
     m = re.search(r"commande fournisseur n[°o]\s*([A-Z0-9\-_]+)", t1, flags=re.IGNORECASE)
     if m:
         fields["N°commande fournisseur"] = m.group(1).strip()
         fields["Commande fournisseur"] = fields["N°commande fournisseur"]
 
-    # Date 04.07.2025
     m = re.search(r"\bdate\s+([0-3]?\d[./-][01]?\d[./-][12]\d{3})", t1)
     if m:
         fields["date du jour"] = m.group(1).strip()
-
-    # Délai de réception : dd.mm.yyyy (take the last occurrence)
-    dates = re.findall(r"delai de reception\s*:\s*([0-3]?\d[./-][01]?\d[./-][12]\d{3})", t1)
-    if dates:
-        fields["date Délai de livraison"] = dates[-1].strip()
 
     # Condition de paiement
     m = re.search(r"condition de paiement[: ]+([0-9a-z ]{4,})", t1)
     if m:
         fields["Cond. de paiement"] = m.group(1).strip()
 
-    # Total TTC CHF — two orders: LABEL number OR number LABEL
+    # Total TTC (both orders)
     m = re.search(r"(montant total ttc chf|total ttc chf)\s*([0-9'’.,]+)", t1, flags=re.IGNORECASE)
     if m:
         fields["Total TTC CHF"] = m.group(2).strip()
@@ -127,7 +121,20 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
 
     return fields
 
-# ---- Column mapping helpers (same as before) ----
+def extract_latest_delivery_date_from_tables(tables: List[pd.DataFrame]) -> Optional[str]:
+    """Scan all table cells, collect dd.mm.yyyy and return the max date as 'dd.mm.yyyy'."""
+    dates: List[datetime] = []
+    for df in tables:
+        for val in df.astype(str).values.ravel():
+            dt = _parse_date_str(val)
+            if dt:
+                dates.append(dt)
+    if not dates:
+        return None
+    latest = max(dates)
+    return latest.strftime("%d.%m.%Y")
+
+# ---- Column mapping helpers ----
 def suggest_column_mapping(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     cols = list(df.columns)
     mapping: Dict[str, Optional[str]] = {k: None for k in EXPECTED_COLUMNS}
@@ -217,7 +224,6 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                         _replace_in_paragraph(p, variant, str(val))
 
 def find_or_create_items_table(doc: Document, expected_cols: List[str]):
-    # always create if nothing looks right
     for table in doc.tables:
         if len(table.rows) >= 1:
             headers = [c.text.strip() for c in table.rows[0].cells]
@@ -269,11 +275,19 @@ def process_pdf_to_docx(
     placeholder_overrides: Optional[Dict[str, str]] = None,
     custom_mapping: Optional[Dict[str, Optional[str]]] = None
 ):
+    # Extract
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
+    # NEW: compute delivery deadline from tables (max date)
+    latest_date = extract_latest_delivery_date_from_tables(tables)
+    if latest_date:
+        fields["Délai de livraison"] = latest_date
+
+    # Apply overrides (user wins)
     if placeholder_overrides:
         fields.update({k: v for k, v in placeholder_overrides.items() if v})
 
+    # Build items table
     if tables:
         base_df = max(tables, key=lambda d: (d.shape[0], d.shape[1]))
     else:
@@ -287,11 +301,9 @@ def process_pdf_to_docx(
     else:
         items_df = pd.DataFrame(columns=EXPECTED_COLUMNS)
 
+    # Prepare a minimal doc with placeholders replaced (table insert later)
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
-
-    from io import BytesIO as _BytesIO
-    out = _BytesIO()
+    out = BytesIO()
     doc.save(out); out.seek(0)
-
     return out.getvalue(), fields, items_df
