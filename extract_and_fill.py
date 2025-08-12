@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix16
+# extract_and_fill.py — fix17
 import re
 import unicodedata
 from io import BytesIO
@@ -258,19 +258,27 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                     for variant in (f"« {key} »", f"«\xa0{key}\xa0»"):
                         _replace_in_paragraph(p, variant, str(val))
 
-def strip_facture_titles(doc: Document):
-    """Ensure any paragraph/header/footer starting with 'Facture' keeps only the word 'Facture'."""
-    def clean_para(p):
+def compute_facture_suffix(fields: Dict[str, str]) -> Optional[str]:
+    """Return the numeric suffix after CF-25-... from 'Commande fournisseur'."""
+    cmd = (fields.get("Commande fournisseur") or "").strip()
+    m = re.search(r"CF-\d{2}-(\d+)", cmd, re.IGNORECASE)
+    if m:
+        return m.group(1)
+    return None
+
+def set_facture_title(doc: Document, suffix: Optional[str]):
+    """Update any paragraph/header/footer starting with 'Facture' to 'Facture {suffix}' (or just 'Facture')."""
+    def set_para(p):
         txt = p.text.strip()
         if txt.startswith("Facture"):
             p.clear()
-            p.add_run("Facture")
+            p.add_run(f"Facture {suffix}" if suffix else "Facture")
     for p in doc.paragraphs:
-        clean_para(p)
+        set_para(p)
     for section in doc.sections:
         for hdr in (section.header, section.footer):
             for p in hdr.paragraphs:
-                clean_para(p)
+                set_para(p)
 
 def find_paragraph_anchor(doc: Document) -> Optional[object]:
     target_re = re.compile(r"cond\.\s*de\s*paiement[s]?", re.IGNORECASE)
@@ -280,12 +288,14 @@ def find_paragraph_anchor(doc: Document) -> Optional[object]:
     return None
 
 def set_table_borders(table):
-    """Set visible borders on table AND each cell (more robust)."""
     try:
-        table.style = "Table Grid"
+        table.style = "Light Shading Accent 1"  # apply a theme first
     except Exception:
-        pass
-    # Table borders
+        try:
+            table.style = "Table Grid"
+        except Exception:
+            pass
+    # Add explicit borders for reliability
     tbl = table._element
     tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement('w:tblPr')
     tblBorders = OxmlElement('w:tblBorders')
@@ -298,7 +308,7 @@ def set_table_borders(table):
         tblBorders.append(element)
     tblPr.append(tblBorders)
     tbl.append(tblPr)
-    # Cell borders as fallback
+    # Cell borders too
     for row in table.rows:
         for cell in row.cells:
             tc = cell._tc
@@ -317,21 +327,31 @@ def set_table_borders(table):
                 el.set(qn('w:space'), '0')
                 el.set(qn('w:color'), 'auto')
 
+def color_first_column(table, fill_hex="EEF3FF"):
+    """Lightly shade the first column cells."""
+    for r in table.rows:
+        cell = r.cells[0]
+        tcPr = cell._tc.get_or_add_tcPr()
+        shd = tcPr.find(qn('w:shd'))
+        if shd is None:
+            shd = OxmlElement('w:shd')
+            tcPr.append(shd)
+        shd.set(qn('w:val'), 'clear')
+        shd.set(qn('w:color'), 'auto')
+        shd.set(qn('w:fill'), fill_hex)
+
 def apply_column_widths_and_alignments(table):
     try:
         table.autofit = False
     except Exception:
         pass
-    # Determine header cells and indices by name
     header_cells = table.rows[0].cells
     headers = [c.text.strip() for c in header_cells]
     idx = {name: i for i, name in enumerate(headers)}
-    # Preferred widths
     widths_in = {}
     if "Pos" in idx: widths_in[idx["Pos"]] = Inches(0.5)
-    if "Désignation" in idx: widths_in[idx["Désignation"]] = Inches(4.7)  # widen
-    if "Qté" in idx: widths_in[idx["Qté"]] = Inches(0.8)  # narrow and centered
-    # Apply widths + alignment
+    if "Désignation" in idx: widths_in[idx["Désignation"]] = Inches(4.7)
+    if "Qté" in idx: widths_in[idx["Qté"]] = Inches(0.8)
     for r in table.rows:
         for j, cell in enumerate(r.cells):
             if j in widths_in:
@@ -410,7 +430,10 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
             cells[i].text = val
             for para in cells[i].paragraphs:
                 if para.runs: para.runs[0].font.size = Pt(10)
+
+    # Style + borders + first column shading + widths/alignments
     set_table_borders(tbl)
+    color_first_column(tbl, fill_hex="EEF3FF")
     apply_column_widths_and_alignments(tbl)
     tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
 
@@ -462,10 +485,11 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
         items_df = reconstruct_items_from_text(text)
         items_df = clean_items_df_keep_full(items_df)
 
-    # Replace placeholders and then normalize titles
+    # Replace placeholders and then set "Facture xxx" title
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
-    strip_facture_titles(doc)
+    suffix = compute_facture_suffix(fields)
+    set_facture_title(doc, suffix)
 
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue(), fields, items_df

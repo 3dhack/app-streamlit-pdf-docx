@@ -1,4 +1,4 @@
-# streamlit_app.py — fix16 UI
+# streamlit_app.py — fix17 UI
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -11,7 +11,7 @@ from extract_and_fill import (
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Bordures renforcées, 'Livré le' alimenté, titre 'Facture' épuré.")
+st.caption("Thème de tableau (1ère colonne colorée), titre 'Facture xxx', Livré le alimenté.")
 
 with st.sidebar:
     st.header("Étapes")
