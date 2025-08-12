@@ -1,11 +1,11 @@
-# PDF → DOCX (Streamlit) — fix11
-Correction d'erreur: **InvalidXmlError: required <w:tblGrid> child element not present**
+# PDF → DOCX (Streamlit) — fix12
+Modifs demandées :
+1) Bordures visibles autour et à l’intérieur du tableau.
+2) Colonne **Pos** : alignée à gauche et largeur réduite (~1.2 cm).
+3) Colonne **Désignation** : alignée à gauche et largeur accrue (~9 cm).
+4) Affichage du champ **Total TTC CHF** sous forme de ligne **en bas à droite** sous le tableau.
+5) Ajout de **2 retours à la ligne** après cette ligne Total.
 
-Changements:
-- Le tableau Word est désormais créé via `doc.add_table()` puis **déplacé** sous « Cond. de paiement » (+2 lignes). Ainsi, la structure XML (tblGrid) est toujours valide.
-- On conserve toutes les fonctionnalités du fix10: CF uppercase, « Notre référence » coupée avant « No TVA », date du jour (Europe/Zurich), Délai de réception max, reconstruction du tableau si besoin, arrêt au dernier item (10/20/30…), bordures, suppression des lignes Indice/Délai de réception et de la colonne TVA.
+Toujours inclus : CF en majuscules, “Notre référence” tronqué avant “No TVA”, date du jour (Europe/Zurich), “Délai de réception” = date max, reconstruction du tableau si besoin, arrêt sur positions 10/20/30…, suppression “Indice :”/“Délai de réception :” et colonne TVA.
 
-Déploiement:
-1) Pousse ces fichiers dans ton repo GitHub
-2) Streamlit Cloud redéploie
-3) Teste la génération: l'erreur `tblGrid` ne doit plus apparaître
+Déploiement : push → Streamlit Cloud redéploie → tester → intégrer WordPress.

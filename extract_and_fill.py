@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix11: safe table insertion (build with add_table then move), keep fix10 features
+# extract_and_fill.py — fix12: borders, column widths, total bottom-right, extra breaks
 import re
 import unicodedata
 from io import BytesIO
@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 import pdfplumber
 import pandas as pd
 from docx import Document
-from docx.shared import Pt
+from docx.shared import Pt, Cm
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
 from docx.oxml import OxmlElement
@@ -77,20 +77,17 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
-    """Parse key header fields from raw text; keep original accents/case when possible."""
     fields: Dict[str, str] = {}
 
     raw = text.replace("\xa0", " ")
     norm = _strip_accents(raw).lower()
 
-    # N° commande fournisseur (CF) — force uppercase
     m_norm = re.search(r"commande fournisseur n[°o]\s*([A-Za-z0-9\-_]+)", norm, flags=re.IGNORECASE)
     if m_norm:
         cf = m_norm.group(1).strip()
         fields["N°commande fournisseur"] = cf.upper()
         fields["Commande fournisseur"] = cf.upper()
 
-    # Notre référence : take from raw, but trim before "No TVA"/"N° TVA"/"TVA"
     m_line = re.search(r"(?i)(Notre\s+référence\s*:\s*)(.*)", raw)
     if m_line:
         after = m_line.group(2).strip()
@@ -108,7 +105,6 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
             value = after.strip(" -–—\t·:;")
         fields["Notre référence"] = value[:60]
 
-    # Total TTC CHF
     m = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
     if m:
         fields["Total TTC CHF"] = m.group(2).strip()
@@ -319,7 +315,6 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                         _replace_in_paragraph(p, variant, str(val))
 
 def find_paragraph_anchor(doc: Document) -> Optional[object]:
-    """Find the paragraph containing 'Cond. de paiement' (accent-insensitive, plural accepted)."""
     target_re = re.compile(r"cond\.\s*de\s*paiement[s]?", re.IGNORECASE)
     for p in doc.paragraphs:
         txt = _strip_accents(p.text).lower()
@@ -328,7 +323,6 @@ def find_paragraph_anchor(doc: Document) -> Optional[object]:
     return None
 
 def insert_paragraph_after(paragraph, text=""):
-    """Insert a new paragraph after given paragraph and return it."""
     new_p = OxmlElement('w:p')
     paragraph._p.addnext(new_p)
     from docx.text.paragraph import Paragraph
@@ -355,22 +349,53 @@ def set_table_borders(table):
     tblPr.append(tblBorders)
     tbl.append(tblPr)
 
-def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame):
+def apply_column_tweaks(table, df: pd.DataFrame):
+    """Align and set preferred widths: Pos = narrow & left; Désignation = wide & left; numbers right."""
+    pos_idx = None
+    des_idx = None
+    for i, c in enumerate(df.columns):
+        nc = _strip_accents(str(c)).lower().strip()
+        if nc in ("pos", "pos."):
+            pos_idx = i
+        if "designation" in nc:
+            des_idx = i
+    # widths in centimeters (best-effort, Word may adjust)
+    for r in table.rows:
+        cells = r.cells
+        for i, cell in enumerate(cells):
+            for para in cell.paragraphs:
+                if i == pos_idx or i == des_idx:
+                    para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+            try:
+                if i == pos_idx:
+                    cell.width = Cm(1.2)
+                elif i == des_idx:
+                    cell.width = Cm(9.0)
+            except Exception:
+                pass
+
+def move_element_after(ref_p, element):
+    """Move an XML element (like table._element) after a paragraph element."""
+    ref_p._p.addnext(element)
+
+def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc: Optional[str] = None):
     """Insert df as table exactly two blank lines below the 'Cond. de paiement' paragraph.
-       Build table with document.add_table() to ensure tblGrid exists, then move it.
+       Then add 'Total TTC CHF xxx' aligned right, and up to 2 empty lines.
+       If anchor not found, append at end.
     """
     if df is None or df.empty:
         return
     df = df.copy()
     df.columns = [str(c) for c in df.columns]
 
-    anchor = find_paragraph_anchor(doc)
-
-    # Create table safely at end
+    # Create table at end (safe with tblGrid), fill it, then move it
     tbl = doc.add_table(rows=1, cols=len(df.columns))
     # header
     for i, c in enumerate(df.columns):
-        tbl.rows[0].cells[i].text = str(c)
+        cell = tbl.rows[0].cells[i]
+        cell.text = str(c)
+        if cell.paragraphs and cell.paragraphs[0].runs:
+            cell.paragraphs[0].runs[0].font.bold = True
     # rows
     for _, row in df.iterrows():
         cells = tbl.add_row().cells
@@ -380,18 +405,48 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame):
             for para in cells[i].paragraphs:
                 if para.runs:
                     para.runs[0].font.size = Pt(10)
+                # align numbers to right
                 if re.match(r"^\s*[0-9'’.,]+\s*$", val):
                     para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
                 else:
                     para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-    set_table_borders(tbl)
 
-    # Move table after anchor + two blank lines (or leave at end if no anchor)
+    # borders + column tweaks
+    set_table_borders(tbl)
+    apply_column_tweaks(tbl, df)
+
+    # find anchor and insert 2 empty paragraphs then move table
+    anchor = find_paragraph_anchor(doc)
     if anchor is not None:
         p1 = insert_paragraph_after(anchor, "")
         p2 = insert_paragraph_after(p1, "")
-        # move underlying element
-        p2._p.addnext(tbl._tbl)
+        move_element_after(p2, tbl._element)
+
+        # Total TTC CHF bottom-right
+        if total_ttc:
+            p_total = insert_paragraph_after(p2, f"Total TTC CHF {total_ttc}")
+        else:
+            p_total = insert_paragraph_after(p2, "Total TTC CHF")
+        p_total.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+        if p_total.runs:
+            p_total.runs[0].bold = True
+            p_total.runs[0].font.size = Pt(11)
+
+        # up to 2 line breaks
+        insert_paragraph_after(p_total, "")
+        insert_paragraph_after(p_total, "")
+    else:
+        # no anchor: table remains at end, then total and line breaks
+        if total_ttc:
+            p_total = doc.add_paragraph(f"Total TTC CHF {total_ttc}")
+        else:
+            p_total = doc.add_paragraph("Total TTC CHF")
+        p_total.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+        if p_total.runs:
+            p_total.runs[0].bold = True
+            p_total.runs[0].font.size = Pt(11)
+        doc.add_paragraph("")
+        doc.add_paragraph("")
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[bytes, Dict[str, str], pd.DataFrame]:
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
@@ -413,7 +468,7 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
     if from_text:
         fields["Délai de réception"] = max(from_text).strftime("%d.%m.%Y")
 
-    # Items table: prefer pdf tables; else reconstruct from text; then truncate and clean
+    # Items table
     if tables:
         base_df = max(tables, key=lambda d: (d.shape[0], d.shape[1]))
         items_df = clean_items_df_keep_full(base_df)
@@ -427,9 +482,9 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue(), fields, items_df
 
-# Public helpers re-exported for app
-def insert_items_table_at_position(doc_bytes: bytes, df: pd.DataFrame) -> bytes:
+# Public helpers
+def insert_items_table_at_position(doc_bytes: bytes, df: pd.DataFrame, total_ttc: Optional[str]) -> bytes:
     doc = Document(BytesIO(doc_bytes))
-    insert_df_two_lines_below_anchor(doc, df)
+    insert_df_two_lines_below_anchor(doc, df, total_ttc)
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue()
