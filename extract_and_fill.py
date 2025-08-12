@@ -1,5 +1,6 @@
-# extract_and_fill.py
+# extract_and_fill.py — robust parsing
 import re
+import unicodedata
 from io import BytesIO
 from decimal import Decimal, InvalidOperation
 from typing import Dict, List, Tuple, Optional
@@ -12,28 +13,29 @@ from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
 
 EXPECTED_COLUMNS = ["Pos.", "Référence", "Désignation", "Qté", "Prix unit.", "Total CHF"]
 
-# ------------------------------
-# PDF extraction + cleaning
-# ------------------------------
+def _strip_accents(s: str) -> str:
+    return "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c))
+
+def _norm_spaces(s: str) -> str:
+    return re.sub(r"\s+", " ", s).strip()
 
 def _insert_missing_spaces(text: str) -> str:
-    # Insert a missing space before codes like 'PC123456' if glued to a number
+    # e.g. "1'347.36Montant" -> "1'347.36 Montant"
+    text = re.sub(r"(\d)[A-Za-z]", lambda m: m.group(0)[0] + " " + m.group(0)[1:], text)
     # e.g., "23.40PC235490" -> "23.40 PC235490"
-    return re.sub(r"(\d)(PC\d{3,})", r"\1 \2", text)
+    text = re.sub(r"(\d)(PC\d{3,})", r"\1 \2", text)
+    return text
 
 def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]]:
-    """
-    Extract full text + candidate tables using pdfplumber.
-    Returns (full_text, list_of_dataframes)
-    """
     texts = []
     tables: List[pd.DataFrame] = []
     with pdfplumber.open(file_like) as pdf:
         for page in pdf.pages:
             raw_text = page.extract_text() or ""
-            texts.append(_insert_missing_spaces(raw_text))
+            raw_text = _insert_missing_spaces(raw_text)
+            texts.append(raw_text)
 
-            # Try multiple table extraction strategies
+            # collect tables
             try:
                 for raw in page.extract_tables() or []:
                     if not raw or len(raw) < 1:
@@ -41,7 +43,6 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
                     header = raw[0]
                     rows = raw[1:] if len(raw) > 1 else []
                     if not header or all(h is None or str(h).strip()=="" for h in header):
-                        # create generic headers
                         ncols = max(len(r) for r in raw if r) if raw else 0
                         header = [f"Col{i+1}" for i in range(ncols)]
                     df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
@@ -50,7 +51,6 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
                         tables.append(df)
             except Exception:
                 pass
-
             try:
                 raw_single = page.extract_table()
                 if raw_single and len(raw_single) > 1:
@@ -66,8 +66,8 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
             except Exception:
                 pass
 
-    # Deduplicate by signature
-    unique: List[pd.DataFrame] = []
+    # de-duplicate
+    unique = []
     sigs = set()
     for df in tables:
         sig = (tuple(df.columns), df.shape)
@@ -79,93 +79,83 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
     return full_text, unique
 
 def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
-    # drop all-empty columns, strip headers and cells
     df.columns = [str(c).strip() for c in df.columns]
     df = df.loc[:, ~(df.columns.str.strip()=="")]
     df = df.applymap(lambda x: (str(x).strip() if x is not None else ""))
-    # remove empty rows
     df = df.loc[~(df.apply(lambda r: all((not str(v).strip()) for v in r), axis=1))]
     return df.reset_index(drop=True)
 
-# ------------------------------
-# Field parsing (header/footer info)
-# ------------------------------
-
 def parse_fields_from_text(text: str) -> Dict[str, str]:
     """
-    Extracts common fields from the free text using regexes.
+    Robust parser: accent-insensitive & both 'label before number' and 'number before label' for totals.
+    Picks the latest delivery deadline found (common in line items).
     """
     fields: Dict[str, str] = {}
+    t0 = text
+    t1 = _strip_accents(t0)
+    t1 = _norm_spaces(t1)
 
-    m = re.search(r"Commande fournisseur N[°º]\s*([A-Z0-9\-_]+)", text, flags=re.IGNORECASE)
+    # Commande fournisseur N° CF-25-05259
+    m = re.search(r"commande fournisseur n[°o]\s*([A-Z0-9\-_]+)", t1, flags=re.IGNORECASE)
     if m:
         fields["N°commande fournisseur"] = m.group(1).strip()
         fields["Commande fournisseur"] = fields["N°commande fournisseur"]
 
-    m = re.search(r"Date\s*([0-3]?\d\.[01]?\d\.[12]\d{3})", text)
+    # Date 04.07.2025
+    m = re.search(r"\bdate\s+([0-3]?\d[./-][01]?\d[./-][12]\d{3})", t1)
     if m:
         fields["date du jour"] = m.group(1).strip()
 
-    m = re.search(r"Délai de réception\s*:\s*([0-3]?\d\.[01]?\d\.[12]\d{3})", text)
-    if m:
-        fields["date Délai de livraison"] = m.group(1).strip()
+    # Délai de réception : dd.mm.yyyy (take the last occurrence)
+    dates = re.findall(r"delai de reception\s*:\s*([0-3]?\d[./-][01]?\d[./-][12]\d{3})", t1)
+    if dates:
+        fields["date Délai de livraison"] = dates[-1].strip()
 
-    m = re.search(r"Condition de paiement\s*([A-Za-z0-9\s]+)", text)
+    # Condition de paiement
+    m = re.search(r"condition de paiement[: ]+([0-9a-z ]{4,})", t1)
     if m:
         fields["Cond. de paiement"] = m.group(1).strip()
 
-    m = re.search(r"(Montant Total TTC CHF|Total TTC CHF)\s*([0-9'’.,]+)", text, flags=re.IGNORECASE)
+    # Total TTC CHF — two orders: LABEL number OR number LABEL
+    m = re.search(r"(montant total ttc chf|total ttc chf)\s*([0-9'’.,]+)", t1, flags=re.IGNORECASE)
     if m:
         fields["Total TTC CHF"] = m.group(2).strip()
+    else:
+        m = re.search(r"([0-9'’.,]+)\s*(montant total ttc chf|total ttc chf)", t1, flags=re.IGNORECASE)
+        if m:
+            fields["Total TTC CHF"] = m.group(1).strip()
 
     return fields
 
-# ------------------------------
-# Column auto-mapping
-# ------------------------------
-
+# ---- Column mapping helpers (same as before) ----
 def suggest_column_mapping(df: pd.DataFrame) -> Dict[str, Optional[str]]:
-    """
-    Suggest mapping from df columns to EXPECTED_COLUMNS keys.
-    Returns dict: {expected_col_name: df_column_name or None}
-    """
     cols = list(df.columns)
     mapping: Dict[str, Optional[str]] = {k: None for k in EXPECTED_COLUMNS}
-
-    # Simple heuristics
     for c in cols:
-        lc = c.lower()
-        if mapping["Référence"] is None and re.search(r"réf|ref|pc\d+|code", lc):
+        lc = _strip_accents(c.lower())
+        if mapping["Référence"] is None and re.search(r"\b(ref|ref\.|pc\d+|code)\b", lc):
             mapping["Référence"] = c
-        if mapping["Désignation"] is None and re.search(r"désignation|designation|descr|désign", lc):
+        if mapping["Désignation"] is None and re.search(r"designation|description|design", lc):
             mapping["Désignation"] = c
-        if mapping["Qté"] is None and re.search(r"qt|quant|qte|qty", lc):
+        if mapping["Qté"] is None and re.search(r"\b(qte|qt|qty|quant)\b", lc):
             mapping["Qté"] = c
-        if mapping["Prix unit."] is None and re.search(r"prix.*unit|unit.*price|p\.?u", lc):
+        if mapping["Prix unit."] is None and re.search(r"(prix.*unit|unit.*price|p\.?u)", lc):
             mapping["Prix unit."] = c
-        if mapping["Total CHF"] is None and re.search(r"total|montant", lc):
+        if mapping["Total CHF"] is None and re.search(r"\b(total|montant)\b", lc):
             mapping["Total CHF"] = c
-        if mapping["Pos."] is None and re.search(r"pos|position", lc):
+        if mapping["Pos."] is None and re.search(r"\b(pos|position)\b", lc):
             mapping["Pos."] = c
-
-    # Fallbacks by content
     for c in cols:
-        sample = " ".join(df[c].astype(str).head(10).tolist()).lower()
+        sample = _strip_accents(" ".join(df[c].astype(str).head(10).tolist()).lower())
         if mapping["Référence"] is None and re.search(r"\bpc\d{3,}\b", sample):
             mapping["Référence"] = c
-
     return mapping
 
 def apply_mapping(df: pd.DataFrame, mapping: Dict[str, Optional[str]]) -> pd.DataFrame:
-    """
-    Return a new DataFrame with EXPECTED_COLUMNS using the mapping.
-    Missing columns are filled with blanks.
-    """
     out = pd.DataFrame()
     for k in EXPECTED_COLUMNS:
         src = mapping.get(k)
         out[k] = df[src] if src in df.columns else ""
-    # compute totals if missing and possible
     if out["Total CHF"].eq("").all() and not out["Prix unit."].eq("").all() and not out["Qté"].eq("").all():
         try:
             out["Total CHF"] = [
@@ -174,7 +164,6 @@ def apply_mapping(df: pd.DataFrame, mapping: Dict[str, Optional[str]]) -> pd.Dat
             ]
         except Exception:
             pass
-    # normalize numbers alignment later in DOCX
     return out
 
 def _to_decimal(s: str) -> Decimal:
@@ -185,7 +174,6 @@ def _to_decimal(s: str) -> Decimal:
         return Decimal(0)
 
 def _fmt_money(d: Decimal) -> str:
-    # Format like 1'234.56 (CH)
     q = d.quantize(Decimal("0.01"))
     s = f"{q:.2f}"
     whole, dot, frac = s.partition(".")
@@ -193,10 +181,7 @@ def _fmt_money(d: Decimal) -> str:
     grouped = "'".join(rev[i:i+3] for i in range(0, len(rev), 3))[::-1]
     return grouped + (dot + frac if frac else "")
 
-# ------------------------------
-# DOCX utilities
-# ------------------------------
-
+# ---- DOCX helpers ----
 def _replace_in_paragraph(paragraph, target: str, replacement: str):
     if not target:
         return
@@ -213,13 +198,10 @@ def _replace_in_paragraph(paragraph, target: str, replacement: str):
         paragraph.runs[0].text = new_text
 
 def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
-    # paragraphs
     for p in doc.paragraphs:
         for key, val in mapping.items():
             for variant in (f"« {key} »", f"«\xa0{key}\xa0»"):
                 _replace_in_paragraph(p, variant, str(val))
-
-    # tables
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
@@ -227,8 +209,6 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                     for key, val in mapping.items():
                         for variant in (f"« {key} »", f"«\xa0{key}\xa0»"):
                             _replace_in_paragraph(p, variant, str(val))
-
-    # headers/footers
     for section in doc.sections:
         for hdr in (section.header, section.footer):
             for p in hdr.paragraphs:
@@ -236,15 +216,14 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                     for variant in (f"« {key} »", f"«\xa0{key}\xa0»"):
                         _replace_in_paragraph(p, variant, str(val))
 
-def find_or_create_items_table(doc: Document, expected_cols: List[str]) -> 'docx.table.Table':
-    # find a table whose first row matches (subset) of expected headers
+def find_or_create_items_table(doc: Document, expected_cols: List[str]):
+    # always create if nothing looks right
     for table in doc.tables:
         if len(table.rows) >= 1:
             headers = [c.text.strip() for c in table.rows[0].cells]
-            if all(any(h.lower()==eh.lower() for h in headers) for eh in expected_cols if eh in headers):
+            if any(h in headers for h in expected_cols):
                 _clear_table_rows_but_header(table)
                 return table
-    # else create new table at end
     table = doc.add_table(rows=1, cols=len(expected_cols))
     for i, h in enumerate(expected_cols):
         table.rows[0].cells[i].text = h
@@ -284,26 +263,17 @@ def add_total_bottom_right(doc: Document, total: Optional[str]):
     run.bold = True
     run.font.size = Pt(11)
 
-# ------------------------------
-# High-level API
-# ------------------------------
-
 def process_pdf_to_docx(
     pdf_bytes: bytes,
     template_docx_bytes: bytes,
     placeholder_overrides: Optional[Dict[str, str]] = None,
     custom_mapping: Optional[Dict[str, Optional[str]]] = None
-) -> Tuple[bytes, Dict[str, str], pd.DataFrame]:
-    """
-    Returns (generated_docx_bytes, detected_fields, mapped_items_df)
-    """
+):
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
-
     if placeholder_overrides:
         fields.update({k: v for k, v in placeholder_overrides.items() if v})
 
-    # Choose largest table and build mapping
     if tables:
         base_df = max(tables, key=lambda d: (d.shape[0], d.shape[1]))
     else:
@@ -317,16 +287,11 @@ def process_pdf_to_docx(
     else:
         items_df = pd.DataFrame(columns=EXPECTED_COLUMNS)
 
-    # Build document
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
 
-    table = find_or_create_items_table(doc, EXPECTED_COLUMNS)
-    insert_items_into_table(table, items_df)
+    from io import BytesIO as _BytesIO
+    out = _BytesIO()
+    doc.save(out); out.seek(0)
 
-    add_total_bottom_right(doc, fields.get("Total TTC CHF"))
-
-    out = BytesIO()
-    doc.save(out)
-    out.seek(0)
-    return out.read(), fields, items_df
+    return out.getvalue(), fields, items_df

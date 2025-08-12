@@ -1,22 +1,11 @@
-# PDF → DOCX (Streamlit) — version PRO (mappage + édition)
+# PDF → DOCX (Streamlit) — fix 2 (parsing robuste)
 
-Améliorations incluses :
-- Détection + **mappage des colonnes** vers Pos./Référence/Désignation/Qté/Prix/Total
-- **Insertion robuste** dans la première table du modèle (ou création)
-- Remplacement de placeholders « … » **partout** (paragraphes, tables, en-têtes/pieds)
-- Ajout du **Total TTC CHF** en bas à droite
-- **Édition manuelle** du tableau avant génération (Data Editor Streamlit)
+- Parsing **insensible aux accents** (commande fournisseur, délai, etc.)
+- Gestion du **Total TTC** même si le **nombre précède le libellé**
+- Normalisation espaces (cas comme `1'347.36Montant`)
+- Auto-préremplissage, éditeur de tableau, génération robuste
 
 ## Déploiement
-1. Push dans un repo GitHub **public**
-2. Streamlit Cloud → **Deploy a public app from GitHub**
-3. Main file: `streamlit_app.py`
-
-## Intégration WordPress
-```html
-<iframe src="https://xxx.streamlit.app?embed=true" width="100%" height="900" style="border:none;"></iframe>
-```
-
-## Conseils
-- Si certaines colonnes ne sont pas reconnues, édite le tableau dans l’interface avant de générer.
-- Pour une extraction plus fiable sur des PDF "difficiles", on peut ajouter un fallback Camelot/Tabula (nécessite deps système, pas dispo sur Streamlit Cloud gratuit).
+1) Pousse ces fichiers dans ton repo GitHub public
+2) Streamlit Cloud redéploie
+3) Test en direct puis intégration WordPress (?embed=true)
