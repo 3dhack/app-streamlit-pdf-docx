@@ -1,4 +1,4 @@
-# streamlit_app.py — fix5: keep "Délai de réception" UI and mapping
+# streamlit_app.py — fix6 UI (no Cond. de paiement, no table editor, auto today's date)
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -6,29 +6,25 @@ from docx import Document
 
 from extract_and_fill import (
     process_pdf_to_docx,
-    EXPECTED_COLUMNS,
-    replace_placeholders_everywhere,
-    find_or_create_items_table,
-    insert_items_into_table,
-    add_total_bottom_right,
+    insert_any_df_into_doc,
 )
 
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Charge un PDF + un modèle DOCX. Corrige la détection si besoin, puis génère le document final.")
+st.caption("Charge un PDF + un modèle DOCX. La date du jour est forcée (Europe/Zurich). Le tableau complet est repris (sans 'Indice :' / 'Délai de réception :' et sans colonne TVA).")
 
 with st.sidebar:
     st.header("Étapes")
     st.markdown("1. Uploader le **PDF**")
     st.markdown("2. Uploader le **modèle .docx**")
-    st.markdown("3. Vérifier/éditer le **tableau** et les **champs**")
+    st.markdown("3. Vérifier l'aperçu")
     st.markdown("4. **Générer** et télécharger le `.docx`")
 
 pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
 docx_template = st.file_uploader("Modèle Word (.docx)", type=["docx"])
 
-for k in ["detected_fields", "items_df", "tmpl_bytes", "pdf_bytes"]:
+for k in ["fields", "items_df", "tmpl_bytes", "pdf_bytes", "doc_with_placeholders"]:
     if k not in st.session_state:
         st.session_state[k] = None
 
@@ -39,103 +35,56 @@ def _analyze():
         st.session_state["pdf_bytes"] = pdf_bytes
         st.session_state["tmpl_bytes"] = tmpl_bytes
 
-        out_bytes, detected_fields, items_df = process_pdf_to_docx(
-            pdf_bytes, tmpl_bytes, placeholder_overrides=None, custom_mapping=None
-        )
-
-        st.session_state["detected_fields"] = detected_fields or {}
-        if items_df is None or items_df.empty:
-            items_df = pd.DataFrame(columns=EXPECTED_COLUMNS)
-        else:
-            for col in EXPECTED_COLUMNS:
-                if col not in items_df.columns:
-                    items_df[col] = ""
-            items_df = items_df[EXPECTED_COLUMNS]
+        out_doc_bytes, fields, items_df = process_pdf_to_docx(pdf_bytes, tmpl_bytes)
+        st.session_state["fields"] = fields
         st.session_state["items_df"] = items_df
-
+        st.session_state["doc_with_placeholders"] = out_doc_bytes
     except Exception as e:
         st.exception(e)
 
-if pdf_file and docx_template and (st.session_state["detected_fields"] is None):
+if pdf_file and docx_template and (st.session_state["fields"] is None):
     with st.spinner("Analyse du PDF..."):
         _analyze()
 
-if pdf_file and docx_template and st.session_state["detected_fields"] is not None:
+if pdf_file and docx_template and st.session_state["fields"] is not None:
     if st.button("🔁 Réanalyser à partir des fichiers envoyés"):
         with st.spinner("Ré-analyse du PDF..."):
             _analyze()
 
-# Show placeholders list
-if st.session_state["tmpl_bytes"]:
-    with st.expander("Placeholders détectés dans le modèle"):
-        doc = Document(BytesIO(st.session_state["tmpl_bytes"]))
-        ph = []
-        def collect(txt):
-            if not txt:
-                return
-            parts = txt.split("«")
-            for seg in parts[1:]:
-                if "»" in seg:
-                    ph.append(seg.split("»", 1)[0].strip(" «»\xa0"))
-        for p in doc.paragraphs:
-            collect(p.text)
-        for t in doc.tables:
-            for row in t.rows:
-                for cell in row.cells:
-                    collect(cell.text)
-        st.write(sorted(set([p for p in ph if p])))
+fields = st.session_state["fields"] or {}
+if fields:
+    st.subheader("Champs utilisés")
+    st.write({
+        "N°commande fournisseur": fields.get("N°commande fournisseur", ""),
+        "Commande fournisseur": fields.get("Commande fournisseur", ""),
+        "date du jour": fields.get("date du jour", ""),
+        "Délai de réception": fields.get("Délai de réception", ""),
+        "Total TTC CHF": fields.get("Total TTC CHF", ""),
+    })
 
-det = st.session_state["detected_fields"] or {}
-st.subheader("Champs (auto-détectés, modifiables)")
-col1, col2, col3 = st.columns(3)
-with col1:
-    f_cmd = st.text_input("N°commande fournisseur", value=det.get("N°commande fournisseur", ""))
-    f_cmd2 = st.text_input("Commande fournisseur", value=det.get("Commande fournisseur", f_cmd))
-    f_date = st.text_input("date du jour", value=det.get("date du jour", ""))
-with col2:
-    f_delai_recep = st.text_input("Délai de réception", value=det.get("Délai de réception", ""))
-    f_cond = st.text_input("Cond. de paiement", value=det.get("Cond. de paiement", ""))
-    f_total = st.text_input("Total TTC CHF", value=det.get("Total TTC CHF", ""))
-
-fields_over = {
-    "N°commande fournisseur": f_cmd,
-    "Commande fournisseur": f_cmd2,
-    "date du jour": f_date,
-    "Délai de réception": f_delai_recep,
-    "date Délai de livraison": f_delai_recep,  # legacy alias
-    "Cond. de paiement": f_cond,
-    "Total TTC CHF": f_total,
-}
-
-st.subheader("Tableau (éditable)")
+st.subheader("Aperçu du tableau extrait (après nettoyage)")
 items_df = st.session_state["items_df"]
-if items_df is None:
-    items_df = pd.DataFrame(columns=EXPECTED_COLUMNS)
-edit_df = st.data_editor(items_df, num_rows="dynamic", use_container_width=True)
+if items_df is not None and not items_df.empty:
+    st.dataframe(items_df, use_container_width=True)
+else:
+    st.info("Aucun tableau détecté dans le PDF.")
 
-disabled = not (st.session_state["tmpl_bytes"] and st.session_state["pdf_bytes"])
+disabled = not (st.session_state["tmpl_bytes"] and st.session_state["doc_with_placeholders"])
 if st.button("🧾 Générer le DOCX final", disabled=disabled):
     try:
-        tmpl_bytes = st.session_state["tmpl_bytes"]
-        if not tmpl_bytes:
-            st.error("Template DOCX manquant.")
-        else:
-            doc = Document(BytesIO(tmpl_bytes))
-            replace_placeholders_everywhere(doc, fields_over)
-            table = find_or_create_items_table(doc, EXPECTED_COLUMNS)
-            while len(table.rows) > 1:
-                table._element.remove(table.rows[1]._element)
-            insert_items_into_table(table, edit_df)
-            add_total_bottom_right(doc, fields_over.get("Total TTC CHF", ""))
+        # Recharger le doc (avec placeholders déjà remplacés) et insérer le tableau complet
+        base_doc_bytes = st.session_state["doc_with_placeholders"]
+        doc = Document(BytesIO(base_doc_bytes))
+        insert_any_df_into_doc(doc, st.session_state["items_df"])
 
-            out = BytesIO()
-            doc.save(out); out.seek(0)
-            st.success("DOCX généré !")
-            st.download_button(
-                "Télécharger le DOCX généré",
-                data=out.getvalue(),
-                file_name="commande_remplie.docx",
-                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+        out = BytesIO()
+        doc.save(out); out.seek(0)
+        st.success("DOCX généré !")
+        st.download_button(
+            "Télécharger le DOCX généré",
+            data=out.getvalue(),
+            file_name="commande_remplie.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
     except Exception as e:
         st.exception(e)
