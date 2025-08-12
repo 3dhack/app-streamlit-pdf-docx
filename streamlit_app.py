@@ -1,4 +1,4 @@
-# streamlit_app.py — fix3: field renamed to "Délai de livraison" + choose max date from table
+# streamlit_app.py — fix4: show "Délai de réception" and use it
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -93,15 +93,17 @@ with col1:
     f_cmd2 = st.text_input("Commande fournisseur", value=det.get("Commande fournisseur", f_cmd))
     f_date = st.text_input("date du jour", value=det.get("date du jour", ""))
 with col2:
-    f_delai = st.text_input("Délai de livraison", value=det.get("Délai de livraison", ""))
+    f_delai_recep = st.text_input("Délai de réception", value=det.get("Délai de réception", ""))
     f_cond = st.text_input("Cond. de paiement", value=det.get("Cond. de paiement", ""))
     f_total = st.text_input("Total TTC CHF", value=det.get("Total TTC CHF", ""))
 
+# Map both keys so old templates still work
 fields_over = {
     "N°commande fournisseur": f_cmd,
     "Commande fournisseur": f_cmd2,
     "date du jour": f_date,
-    "Délai de livraison": f_delai,  # <-- renamed key
+    "Délai de réception": f_delai_recep,
+    "date Délai de livraison": f_delai_recep,
     "Cond. de paiement": f_cond,
     "Total TTC CHF": f_total,
 }

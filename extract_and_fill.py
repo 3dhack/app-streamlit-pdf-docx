@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix3: "Délai de livraison" = max date found in PDF tables
+# extract_and_fill.py — fix4: "Délai de réception" from table rows
 import re
 import unicodedata
 from io import BytesIO
@@ -105,12 +105,10 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
     if m:
         fields["date du jour"] = m.group(1).strip()
 
-    # Condition de paiement
     m = re.search(r"condition de paiement[: ]+([0-9a-z ]{4,})", t1)
     if m:
         fields["Cond. de paiement"] = m.group(1).strip()
 
-    # Total TTC (both orders)
     m = re.search(r"(montant total ttc chf|total ttc chf)\s*([0-9'’.,]+)", t1, flags=re.IGNORECASE)
     if m:
         fields["Total TTC CHF"] = m.group(2).strip()
@@ -121,20 +119,29 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
 
     return fields
 
-def extract_latest_delivery_date_from_tables(tables: List[pd.DataFrame]) -> Optional[str]:
-    """Scan all table cells, collect dd.mm.yyyy and return the max date as 'dd.mm.yyyy'."""
+def extract_latest_receipt_deadline_from_tables(tables: List[pd.DataFrame]) -> Optional[str]:
+    """
+    Look for rows that contain 'Délai de réception' (accent-insensitive).
+    For such rows, collect any dd.mm.yyyy appearing in the same row (any column).
+    Return the max date as 'dd.mm.yyyy'.
+    """
     dates: List[datetime] = []
     for df in tables:
-        for val in df.astype(str).values.ravel():
-            dt = _parse_date_str(val)
-            if dt:
-                dates.append(dt)
+        # iterate rows
+        for _, row in df.iterrows():
+            cells = [str(v) if v is not None else "" for v in row.tolist()]
+            norm_cells = [_strip_accents(c.lower()) for c in cells]
+            if any("delai de reception" in c for c in norm_cells):
+                # scan this row for any date
+                for c in cells:
+                    dt = _parse_date_str(c)
+                    if dt:
+                        dates.append(dt)
     if not dates:
         return None
     latest = max(dates)
     return latest.strftime("%d.%m.%Y")
 
-# ---- Column mapping helpers ----
 def suggest_column_mapping(df: pd.DataFrame) -> Dict[str, Optional[str]]:
     cols = list(df.columns)
     mapping: Dict[str, Optional[str]] = {k: None for k in EXPECTED_COLUMNS}
@@ -188,7 +195,6 @@ def _fmt_money(d: Decimal) -> str:
     grouped = "'".join(rev[i:i+3] for i in range(0, len(rev), 3))[::-1]
     return grouped + (dot + frac if frac else "")
 
-# ---- DOCX helpers ----
 def _replace_in_paragraph(paragraph, target: str, replacement: str):
     if not target:
         return
@@ -275,19 +281,19 @@ def process_pdf_to_docx(
     placeholder_overrides: Optional[Dict[str, str]] = None,
     custom_mapping: Optional[Dict[str, Optional[str]]] = None
 ):
-    # Extract
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
-    # NEW: compute delivery deadline from tables (max date)
-    latest_date = extract_latest_delivery_date_from_tables(tables)
-    if latest_date:
-        fields["Délai de livraison"] = latest_date
 
-    # Apply overrides (user wins)
+    # NEW: Délai de réception = max date on rows that contain "Délai de réception"
+    receipt_deadline = extract_latest_receipt_deadline_from_tables(tables)
+    if receipt_deadline:
+        fields["Délai de réception"] = receipt_deadline
+        # also map legacy key just in case template still has old placeholder
+        fields["date Délai de livraison"] = receipt_deadline
+
     if placeholder_overrides:
         fields.update({k: v for k, v in placeholder_overrides.items() if v})
 
-    # Build items table
     if tables:
         base_df = max(tables, key=lambda d: (d.shape[0], d.shape[1]))
     else:
@@ -301,9 +307,9 @@ def process_pdf_to_docx(
     else:
         items_df = pd.DataFrame(columns=EXPECTED_COLUMNS)
 
-    # Prepare a minimal doc with placeholders replaced (table insert later)
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
+
     out = BytesIO()
     doc.save(out); out.seek(0)
     return out.getvalue(), fields, items_df
