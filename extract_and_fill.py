@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix10: trim "Notre référence" before No TVA + place table under "Cond. de paiement"
+# extract_and_fill.py — fix11: safe table insertion (build with add_table then move), keep fix10 features
 import re
 import unicodedata
 from io import BytesIO
@@ -80,7 +80,6 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
     """Parse key header fields from raw text; keep original accents/case when possible."""
     fields: Dict[str, str] = {}
 
-    # Use raw text for capturing strings with original case
     raw = text.replace("\xa0", " ")
     norm = _strip_accents(raw).lower()
 
@@ -107,7 +106,7 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
             value = after[:cut_idx].strip(" -–—\t·:;")
         else:
             value = after.strip(" -–—\t·:;")
-        fields["Notre référence"] = value[:60]  # safeguard
+        fields["Notre référence"] = value[:60]
 
     # Total TTC CHF
     m = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
@@ -118,7 +117,6 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         if m:
             fields["Total TTC CHF"] = m.group(1).strip()
 
-    # date du jour will be overridden by today_ch()
     return fields
 
 def _parse_date_str(s: str) -> Optional[datetime]:
@@ -359,7 +357,7 @@ def set_table_borders(table):
 
 def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame):
     """Insert df as table exactly two blank lines below the 'Cond. de paiement' paragraph.
-       If anchor not found, append at end.
+       Build table with document.add_table() to ensure tblGrid exists, then move it.
     """
     if df is None or df.empty:
         return
@@ -367,41 +365,15 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame):
     df.columns = [str(c) for c in df.columns]
 
     anchor = find_paragraph_anchor(doc)
-    if anchor is None:
-        tbl = doc.add_table(rows=1, cols=len(df.columns))
-        for i, c in enumerate(df.columns):
-            tbl.rows[0].cells[i].text = str(c)
-        for _, row in df.iterrows():
-            cells = tbl.add_row().cells
-            for i, col in enumerate(df.columns):
-                cells[i].text = "" if pd.isna(row[col]) else str(row[col])
-        set_table_borders(tbl)
-        return
 
-    # add two empty paragraphs
-    p1 = insert_paragraph_after(anchor, "")
-    p2 = insert_paragraph_after(p1, "")
-    # now insert table after p2
-    new_tbl = OxmlElement('w:tbl')
-    p2._p.addnext(new_tbl)
-    from docx.table import Table
-    tbl = Table(new_tbl, p2._parent)
-
-    # header row
-    hdr = tbl.add_row().cells
-    # ensure enough cells
-    while len(hdr) < len(df.columns):
-        hdr = tbl.add_row().cells  # workaround: build correct grid via rows
-
-    # First row for headers
+    # Create table safely at end
+    tbl = doc.add_table(rows=1, cols=len(df.columns))
+    # header
     for i, c in enumerate(df.columns):
-        hdr[i].text = str(c)
-
-    # add rows
+        tbl.rows[0].cells[i].text = str(c)
+    # rows
     for _, row in df.iterrows():
         cells = tbl.add_row().cells
-        while len(cells) < len(df.columns):
-            cells = tbl.add_row().cells
         for i, col in enumerate(df.columns):
             val = "" if pd.isna(row[col]) else str(row[col])
             cells[i].text = val
@@ -412,8 +384,14 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame):
                     para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
                 else:
                     para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-
     set_table_borders(tbl)
+
+    # Move table after anchor + two blank lines (or leave at end if no anchor)
+    if anchor is not None:
+        p1 = insert_paragraph_after(anchor, "")
+        p2 = insert_paragraph_after(p1, "")
+        # move underlying element
+        p2._p.addnext(tbl._tbl)
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[bytes, Dict[str, str], pd.DataFrame]:
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))

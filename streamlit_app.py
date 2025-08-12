@@ -1,4 +1,4 @@
-# streamlit_app.py — fix10 UI: table under "Cond. de paiement" + trimmed "Notre référence"
+# streamlit_app.py — fix11 UI: same as fix10, now safe table creation
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -11,7 +11,7 @@ from extract_and_fill import (
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("CF en majuscule, « Notre référence » coupée avant « No TVA ». Le tableau est inséré deux lignes sous « Cond. de paiement ».")
+st.caption("CF en majuscule, « Notre référence » coupée avant « No TVA ». Le tableau est inséré deux lignes sous « Cond. de paiement » (création sûre).")
 
 with st.sidebar:
     st.header("Étapes")
