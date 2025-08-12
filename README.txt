@@ -1,9 +1,9 @@
-# PDF → DOCX (Streamlit) — fix4
-- **Délai de réception** : extrait en cherchant les lignes du tableau contenant 'Délai de réception' (accent-insensible), puis prend **la date la plus grande de la ligne** et enfin **la plus grande de toutes les lignes**.
-- Remplacement compatible avec anciens modèles via la clé **« date Délai de livraison »** qui reçoit la même valeur.
-- Préremplissage auto, édition du tableau, génération robuste.
+# PDF → DOCX (Streamlit) — fix5
+- **Délai de réception** : détecté d'abord dans les **lignes du tableau** (libellé + date), puis **fallback** sur le **texte brut** (lignes contenant "Délai de réception : dd.mm.yyyy"). On prend la **date maximale**.
+- Mapping compatibilité: remplit aussi « date Délai de livraison » si présent dans l'ancien modèle.
+- Auto-préremplissage, éditeur de tableau, génération robuste.
 
 ## Déploiement
 1) Remplace tes fichiers dans le repo GitHub (commit + push)
 2) Streamlit Cloud redéploie
-3) Vérifie que « Délai de réception » est prérempli avec la **date maximale** trouvée dans le tableau
+3) Vérifie que « Délai de réception » est prérempli

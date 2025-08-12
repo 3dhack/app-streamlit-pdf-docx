@@ -1,4 +1,4 @@
-# streamlit_app.py — fix4: show "Délai de réception" and use it
+# streamlit_app.py — fix5: keep "Délai de réception" UI and mapping
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -97,13 +97,12 @@ with col2:
     f_cond = st.text_input("Cond. de paiement", value=det.get("Cond. de paiement", ""))
     f_total = st.text_input("Total TTC CHF", value=det.get("Total TTC CHF", ""))
 
-# Map both keys so old templates still work
 fields_over = {
     "N°commande fournisseur": f_cmd,
     "Commande fournisseur": f_cmd2,
     "date du jour": f_date,
     "Délai de réception": f_delai_recep,
-    "date Délai de livraison": f_delai_recep,
+    "date Délai de livraison": f_delai_recep,  # legacy alias
     "Cond. de paiement": f_cond,
     "Total TTC CHF": f_total,
 }

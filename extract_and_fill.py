@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix4: "Délai de réception" from table rows
+# extract_and_fill.py — fix5: "Délai de réception" from tables OR plain text
 import re
 import unicodedata
 from io import BytesIO
@@ -120,23 +120,45 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
     return fields
 
 def extract_latest_receipt_deadline_from_tables(tables: List[pd.DataFrame]) -> Optional[str]:
-    """
-    Look for rows that contain 'Délai de réception' (accent-insensitive).
-    For such rows, collect any dd.mm.yyyy appearing in the same row (any column).
-    Return the max date as 'dd.mm.yyyy'.
-    """
     dates: List[datetime] = []
     for df in tables:
-        # iterate rows
         for _, row in df.iterrows():
             cells = [str(v) if v is not None else "" for v in row.tolist()]
             norm_cells = [_strip_accents(c.lower()) for c in cells]
             if any("delai de reception" in c for c in norm_cells):
-                # scan this row for any date
                 for c in cells:
                     dt = _parse_date_str(c)
                     if dt:
                         dates.append(dt)
+    if not dates:
+        return None
+    latest = max(dates)
+    return latest.strftime("%d.%m.%Y")
+
+def extract_latest_receipt_deadline_from_text(text: str) -> Optional[str]:
+    """
+    Fallback when table extraction misses it.
+    Scan lines containing 'Délai de réception' and pick the max date nearby.
+    """
+    dates: List[datetime] = []
+    norm = _strip_accents(text).lower().replace("\xa0", " ")
+    # split by lines to keep proximity
+    lines = [l.strip() for l in norm.splitlines() if l.strip()]
+    for ln in lines:
+        if "delai de reception" in ln:
+            # find date on the same line
+            m = DATE_RE.search(ln)
+            if m:
+                d = _parse_date_str(ln)
+                if d:
+                    dates.append(d)
+    # Also try pattern across small spans: 'delai de reception' then date within next 30 chars
+    if not dates:
+        pattern = re.compile(r"delai de reception.{0,30}?([0-3]?\d[./-][01]?\d[./-][12]\d{3})")
+        for m in pattern.finditer(norm):
+            d = _parse_date_str(m.group(0))
+            if d:
+                dates.append(d)
     if not dates:
         return None
     latest = max(dates)
@@ -284,12 +306,13 @@ def process_pdf_to_docx(
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
 
-    # NEW: Délai de réception = max date on rows that contain "Délai de réception"
+    # Délai de réception from tables OR fallback to text
     receipt_deadline = extract_latest_receipt_deadline_from_tables(tables)
+    if not receipt_deadline:
+        receipt_deadline = extract_latest_receipt_deadline_from_text(text)
     if receipt_deadline:
         fields["Délai de réception"] = receipt_deadline
-        # also map legacy key just in case template still has old placeholder
-        fields["date Délai de livraison"] = receipt_deadline
+        fields["date Délai de livraison"] = receipt_deadline  # legacy alias
 
     if placeholder_overrides:
         fields.update({k: v for k, v in placeholder_overrides.items() if v})
