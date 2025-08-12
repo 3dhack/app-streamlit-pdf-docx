@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix7: reconstruct items table from plain text when pdf tables fail
+# extract_and_fill.py — fix9: borders, CF uppercase, "Notre référence"
 import re
 import unicodedata
 from io import BytesIO
@@ -11,6 +11,9 @@ import pandas as pd
 from docx import Document
 from docx.shared import Pt
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 DATE_RE = re.compile(r"\b([0-3]?\d)[./-]([01]?\d)[./-]([12]\d{3})\b")
 
@@ -35,7 +38,6 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
             raw_text = page.extract_text() or ""
             raw_text = _insert_missing_spaces(raw_text)
             texts.append(raw_text)
-            # try multiple & single table extraction
             try:
                 for raw in page.extract_tables() or []:
                     if not raw or len(raw) < 2:
@@ -60,7 +62,6 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
                             tables.append(_clean_df(df))
             except Exception:
                 pass
-    # dedup
     unique, sigs = [], set()
     for df in tables:
         sig = (tuple(df.columns), df.shape)
@@ -78,10 +79,25 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
 def parse_fields_from_text(text: str) -> Dict[str, str]:
     fields: Dict[str, str] = {}
     t1 = _strip_accents(text).lower().replace("\xa0", " ")
+
+    # N° commande fournisseur
     m = re.search(r"commande fournisseur n[°o]\s*([A-Z0-9\-_]+)", t1, flags=re.IGNORECASE)
     if m:
-        fields["N°commande fournisseur"] = m.group(1).strip()
-        fields["Commande fournisseur"] = fields["N°commande fournisseur"]
+        cf = m.group(1).strip()
+        fields["N°commande fournisseur"] = cf.upper()   # force uppercase
+        fields["Commande fournisseur"] = cf.upper()
+
+    # Notre référence : xxxxx
+    m = re.search(r"notre reference\s*:\s*([^\n\r]+)", t1, flags=re.IGNORECASE)
+    if m:
+        # capture original case from raw text by locating the substring around the match
+        # fallback: store lowercased captured group if mapping to original fails
+        value = m.group(1).strip()
+        # remove trailing noise
+        value = re.sub(r"\s+$", "", value)
+        fields["Notre référence"] = value
+
+    # Total TTC CHF
     m = re.search(r"(montant total ttc chf|total ttc chf)\s*([0-9'’.,]+)", t1, flags=re.IGNORECASE)
     if m:
         fields["Total TTC CHF"] = m.group(2).strip()
@@ -89,6 +105,7 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         m = re.search(r"([0-9'’.,]+)\s*(montant total ttc chf|total ttc chf)", t1, flags=re.IGNORECASE)
         if m:
             fields["Total TTC CHF"] = m.group(1).strip()
+
     # date du jour will be overridden by today_ch()
     return fields
 
@@ -112,7 +129,6 @@ def latest_receipt_date_from_text(text: str) -> Optional[str]:
             if dt:
                 dates.append(dt)
     if not dates:
-        # try within 30 chars
         for m in re.finditer(r"delai de reception.{0,30}?([0-3]?\d[./-][01]?\d[./-][12]\d{3})", norm):
             dt = _parse_date_str(m.group(0))
             if dt:
@@ -122,13 +138,8 @@ def latest_receipt_date_from_text(text: str) -> Optional[str]:
     return max(dates).strftime("%d.%m.%Y")
 
 def reconstruct_items_from_text(text: str) -> pd.DataFrame:
-    """
-    Build a table matching the example layout by parsing lines.
-    Expected header (for output): Pos, Référence, Désignation, Unité, Qté, Prix unit., Px u. Net, Total CHF, TVA
-    """
     unit_words = r"(PC|PCE|PCS|PIECE|PIECES|UN|UNITES?|KG|G|MG|L|ML|M|MM|CM)"
     money = r"[0-9'’.,]+"
-    # Core pattern: everything up to unit is designation (non-greedy), then numbers
     item_re = re.compile(
         rf"^\s*(?P<pos>\d{{1,4}})\s+"
         rf"(?P<ref>\d{{3,}})\s+"
@@ -141,18 +152,32 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
         rf"(?:\s+(?P<tva>\d{{2,3}}))?\s*$",
         re.IGNORECASE
     )
-    skip_prefixes = (
-        "tarif douanier", "pays d'origine", "indice :", "delai de reception :", "g3/4"
-    )
+    stop_cues = ("total", "recapitulation", "code tva", "montant", "taux")
+
     rows: List[Dict[str, str]] = []
     current = None
-
+    started = False
     for raw_ln in text.splitlines():
         ln = raw_ln.strip()
         if not ln:
             continue
+
         m = item_re.match(ln)
         if m:
+            pos = m.group("pos")
+            try:
+                if int(pos) % 10 != 0:
+                    if started:
+                        break
+                    else:
+                        continue
+            except Exception:
+                if started:
+                    break
+                else:
+                    continue
+
+            started = True
             if current:
                 rows.append(current)
             gd = m.groupdict()
@@ -169,12 +194,18 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
             }
             continue
 
+        if started and re.match(r"^\d", ln):
+            break
+
         low = _strip_accents(ln).lower()
-        if any(low.startswith(pref) for pref in skip_prefixes):
+        if started and any(low.startswith(c) for c in stop_cues):
+            break
+
+        if any(low.startswith(pref) for pref in ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")):
             continue
 
-        if current:
-            if not re.match(r"^(total|recapitulation|code tva|montant|taux)\b", low):
+        if started and current:
+            if not any(low.startswith(c) for c in stop_cues):
                 if current["Désignation"]:
                     current["Désignation"] += " " + ln.strip()
                 else:
@@ -186,9 +217,48 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
     df = pd.DataFrame(rows, columns=COLUMNS_TARGET)
     return df
 
-def clean_items_df_keep_full(df: pd.DataFrame) -> pd.DataFrame:
-    filtered = []
+def truncate_after_items_block(df: pd.DataFrame) -> pd.DataFrame:
+    if df is None or df.empty:
+        return df
+    keep = []
+    started = False
     for _, r in df.iterrows():
+        first = ""
+        for v in r.tolist():
+            s = str(v).strip() if v is not None else ""
+            if s:
+                first = s
+                break
+        if re.fullmatch(r"\d{1,4}", first):
+            try:
+                if int(first) % 10 == 0:
+                    keep.append(r)
+                    started = True
+                    continue
+                else:
+                    if started:
+                        break
+                    else:
+                        continue
+            except Exception:
+                if started:
+                    break
+                else:
+                    continue
+        else:
+            if started:
+                break
+            else:
+                continue
+    if not keep:
+        return df
+    out = pd.DataFrame(keep, columns=df.columns).reset_index(drop=True)
+    return out
+
+def clean_items_df_keep_full(df: pd.DataFrame) -> pd.DataFrame:
+    df2 = truncate_after_items_block(df.copy())
+    filtered = []
+    for _, r in df2.iterrows():
         first_non_empty = ""
         for v in r.tolist():
             s = str(v).strip() if v is not None else ""
@@ -198,7 +268,7 @@ def clean_items_df_keep_full(df: pd.DataFrame) -> pd.DataFrame:
         if first_non_empty.startswith("indice :") or first_non_empty.startswith("delai de reception :"):
             continue
         filtered.append(r)
-    new_df = pd.DataFrame(filtered, columns=df.columns) if filtered else df.iloc[0:0].copy()
+    new_df = pd.DataFrame(filtered, columns=df2.columns) if filtered else df2.iloc[0:0].copy()
     keep_cols = []
     for c in new_df.columns:
         if _strip_accents(str(c)).strip().lower() == "tva":
@@ -248,6 +318,25 @@ def clear_table_rows_but_header(table):
     while len(table.rows) > 1:
         table._element.remove(table.rows[1]._element)
 
+def set_table_borders(table):
+    # Apply Word "Table Grid" style if available, and enforce borders via oxml
+    try:
+        table.style = "Table Grid"
+    except Exception:
+        pass
+    tbl = table._element
+    tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement('w:tblPr')
+    tblBorders = OxmlElement('w:tblBorders')
+    for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
+        element = OxmlElement(f'w:{edge}')
+        element.set(qn('w:val'), 'single')
+        element.set(qn('w:sz'), '8')      # 0.5 pt approx
+        element.set(qn('w:space'), '0')
+        element.set(qn('w:color'), 'auto')
+        tblBorders.append(element)
+    tblPr.append(tblBorders)
+    tbl.append(tblPr)
+
 def insert_any_df_into_doc(doc: Document, df: pd.DataFrame):
     if df is None or df.empty:
         return
@@ -271,6 +360,7 @@ def insert_any_df_into_doc(doc: Document, df: pd.DataFrame):
                         para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
                     else:
                         para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+        set_table_borders(target)
     else:
         tbl = doc.add_table(rows=1, cols=len(df.columns))
         for i, c in enumerate(df.columns):
@@ -287,11 +377,11 @@ def insert_any_df_into_doc(doc: Document, df: pd.DataFrame):
                         para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
                     else:
                         para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+        set_table_borders(tbl)
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[bytes, Dict[str, str], pd.DataFrame]:
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
-    # Force today's date
     fields["date du jour"] = today_ch()
 
     # Délai de réception (max) from text
@@ -309,15 +399,15 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
     if from_text:
         fields["Délai de réception"] = max(from_text).strftime("%d.%m.%Y")
 
-    # Items table: prefer pdf tables; else reconstruct from text
+    # Items table: prefer pdf tables; else reconstruct from text; then truncate and clean
     if tables:
         base_df = max(tables, key=lambda d: (d.shape[0], d.shape[1]))
-        items_df = base_df
+        items_df = clean_items_df_keep_full(base_df)
     else:
         items_df = reconstruct_items_from_text(text)
+        items_df = clean_items_df_keep_full(items_df)
 
-    items_df = clean_items_df_keep_full(items_df)
-
+    # Build doc with placeholders replaced
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
     out = BytesIO(); doc.save(out); out.seek(0)

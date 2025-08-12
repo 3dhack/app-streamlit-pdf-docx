@@ -1,10 +1,15 @@
-# PDF → DOCX (Streamlit) — fix7
-- Si `pdfplumber` n'extrait aucun tableau, on reconstruit le tableau d'articles à partir du texte brut (pattern compatible avec ton exemple).
-- Désignations multilignes gérées (ex. "G3/4").
-- Lignes "Indice :" / "Délai de réception :" ignorées et colonne "TVA" supprimée.
+# PDF → DOCX (Streamlit) — fix9
+Nouveautés :
+1) **Tableau avec bordures** (style *Table Grid* + bordures forcées en oxml).
+2) **CF en majuscule** : 'Commande fournisseur' et 'N°commande fournisseur' sont écrits en UPPERCASE.
+3) **Notre référence** : extraction automatique depuis 'Notre référence : xxxxx' dans le PDF, champ Word « Notre référence » rempli.
+
+Toujours en place :
 - Date du jour forcée (Europe/Zurich).
+- Délai de réception = plus grande date trouvée dans le PDF.
+- Reconstruction du tableau si nécessaire + arrêt au dernier item (10/20/30...).
 
 ## Déploiement
-1) Pousse ces fichiers dans un repo GitHub public
-2) Streamlit Cloud: Deploy public app → `streamlit_app.py`
-3) Teste l'URL directe, puis intègre dans WordPress avec `?embed=true`
+1) Remplace tes fichiers dans le repo GitHub (commit + push)
+2) Streamlit Cloud redéploie
+3) Intègre dans WordPress (`?embed=true`) si besoin

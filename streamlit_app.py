@@ -1,4 +1,4 @@
-# streamlit_app.py — fix7 UI (fallback table reconstruction)
+# streamlit_app.py — fix9 UI (borders + CF uppercase + Notre référence)
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -12,7 +12,7 @@ from extract_and_fill import (
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("La date du jour est forcée (Europe/Zurich). Le tableau est repris du PDF, et si non détecté, il est reconstruit à partir du texte. Lignes 'Indice :'/'Délai de réception :' et colonne 'TVA' supprimées.")
+st.caption("CF en majuscule, 'Notre référence' extrait du PDF, tableau avec bordures. Date du jour = aujourd'hui (Europe/Zurich).")
 
 with st.sidebar:
     st.header("Étapes")
@@ -57,20 +57,20 @@ if fields:
     st.write({
         "N°commande fournisseur": fields.get("N°commande fournisseur", ""),
         "Commande fournisseur": fields.get("Commande fournisseur", ""),
+        "Notre référence": fields.get("Notre référence", ""),
         "date du jour": fields.get("date du jour", ""),
         "Délai de réception": fields.get("Délai de réception", ""),
         "Total TTC CHF": fields.get("Total TTC CHF", ""),
     })
 
-st.subheader("Aperçu du tableau extrait/reconstruit (après nettoyage)")
+st.subheader("Aperçu du tableau (après nettoyage & bordures)")
 items_df = st.session_state["items_df"]
 if items_df is not None and not items_df.empty:
     st.dataframe(items_df, use_container_width=True)
 else:
-    st.warning("Aucun tableau détecté ni reconstruit à partir du texte. Envoie-moi un extrait pour ajuster la règle.")
+    st.warning("Aucun tableau détecté ou reconstruit.")
 
-disabled = not (st.session_state["tmpl_bytes"] and st.session_state["doc_with_placeholders"])
-if st.button("🧾 Générer le DOCX final", disabled=disabled):
+if st.button("🧾 Générer le DOCX final", disabled=not (st.session_state.get('tmpl_bytes') and st.session_state.get('doc_with_placeholders'))):
     try:
         base_doc_bytes = st.session_state["doc_with_placeholders"]
         doc = Document(BytesIO(base_doc_bytes))
