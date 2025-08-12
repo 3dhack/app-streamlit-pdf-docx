@@ -1,4 +1,4 @@
-# streamlit_app.py — fix13 UI
+# streamlit_app.py — fix14 UI
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -21,7 +21,7 @@ with st.sidebar:
     st.markdown("4. **Générer** et télécharger le `.docx`")
 
 pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
-docx_template = st.file_uploader("Modèle Word (.docx)", type=["docx"])
+docx_template = st.file_uploader("Modèle Word (.docx)")
 
 for k in ["fields", "items_df", "tmpl_bytes", "pdf_bytes", "doc_with_placeholders"]:
     if k not in st.session_state:
