@@ -1,23 +1,23 @@
-# streamlit_app.py — fix12 UI
+# streamlit_app.py — fix13 UI
 import streamlit as st
 import pandas as pd
 from io import BytesIO
 
 from extract_and_fill import (
     process_pdf_to_docx,
-    insert_items_table_at_position,
+    build_final_doc,
 )
 
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Bordures visibles, Pos étroite à gauche, Désignation large à gauche, Total TTC en bas à droite + 2 sauts de ligne.")
+st.caption("Tableau avec bordures, Pos/Désignation alignées à gauche, Total TTC CHF sous le tableau + 2 retours à la ligne.")
 
 with st.sidebar:
     st.header("Étapes")
     st.markdown("1. Uploader le **PDF**")
     st.markdown("2. Uploader le **modèle .docx**")
-    st.markdown("3. Vérifier l'aperçu et les champs")
+    st.markdown("3. Vérifier l'aperçu")
     st.markdown("4. **Générer** et télécharger le `.docx`")
 
 pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
@@ -72,8 +72,8 @@ else:
 if st.button("🧾 Générer le DOCX final", disabled=not (st.session_state.get('tmpl_bytes') and st.session_state.get('doc_with_placeholders'))):
     try:
         base_doc_bytes = st.session_state["doc_with_placeholders"]
-        total = (st.session_state["fields"] or {}).get("Total TTC CHF", "")
-        final_doc = insert_items_table_at_position(base_doc_bytes, st.session_state["items_df"], total)
+        total_ttc = (st.session_state["fields"] or {}).get("Total TTC CHF", "")
+        final_doc = build_final_doc(base_doc_bytes, st.session_state["items_df"], total_ttc)
 
         st.success("DOCX généré !")
         st.download_button(
