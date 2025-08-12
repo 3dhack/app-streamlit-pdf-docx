@@ -1,13 +1,10 @@
-# PDF → DOCX (Streamlit) — fix6
-Modifs demandées :
-1) **Date du jour** : forcée à la date actuelle (Europe/Zurich) — format dd.mm.yyyy.
-2) **Cond. de paiement** : supprimé de l'UI et des remplacements.
-3) **Tableau** : reprise du **tableau complet** du PDF dans le Word, **sans édition**.
-   - Suppression des **lignes** dont la première cellule non vide commence par "Indice :" ou "Délai de réception :".
-   - Suppression de la **colonne "TVA"** (insensible aux accents).
-   - Insertion dans la **première table** si le nombre de colonnes correspond, sinon création d'une table à la fin.
+# PDF → DOCX (Streamlit) — fix7
+- Si `pdfplumber` n'extrait aucun tableau, on reconstruit le tableau d'articles à partir du texte brut (pattern compatible avec ton exemple).
+- Désignations multilignes gérées (ex. "G3/4").
+- Lignes "Indice :" / "Délai de réception :" ignorées et colonne "TVA" supprimée.
+- Date du jour forcée (Europe/Zurich).
 
 ## Déploiement
-- Remplace les fichiers dans ton repo GitHub (commit + push)
-- Streamlit Cloud redéploie automatiquement
-- Intègre dans WordPress avec `?embed=true` si besoin
+1) Pousse ces fichiers dans un repo GitHub public
+2) Streamlit Cloud: Deploy public app → `streamlit_app.py`
+3) Teste l'URL directe, puis intègre dans WordPress avec `?embed=true`

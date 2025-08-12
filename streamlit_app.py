@@ -1,4 +1,4 @@
-# streamlit_app.py — fix6 UI (no Cond. de paiement, no table editor, auto today's date)
+# streamlit_app.py — fix7 UI (fallback table reconstruction)
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -12,7 +12,7 @@ from extract_and_fill import (
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Charge un PDF + un modèle DOCX. La date du jour est forcée (Europe/Zurich). Le tableau complet est repris (sans 'Indice :' / 'Délai de réception :' et sans colonne TVA).")
+st.caption("La date du jour est forcée (Europe/Zurich). Le tableau est repris du PDF, et si non détecté, il est reconstruit à partir du texte. Lignes 'Indice :'/'Délai de réception :' et colonne 'TVA' supprimées.")
 
 with st.sidebar:
     st.header("Étapes")
@@ -62,17 +62,16 @@ if fields:
         "Total TTC CHF": fields.get("Total TTC CHF", ""),
     })
 
-st.subheader("Aperçu du tableau extrait (après nettoyage)")
+st.subheader("Aperçu du tableau extrait/reconstruit (après nettoyage)")
 items_df = st.session_state["items_df"]
 if items_df is not None and not items_df.empty:
     st.dataframe(items_df, use_container_width=True)
 else:
-    st.info("Aucun tableau détecté dans le PDF.")
+    st.warning("Aucun tableau détecté ni reconstruit à partir du texte. Envoie-moi un extrait pour ajuster la règle.")
 
 disabled = not (st.session_state["tmpl_bytes"] and st.session_state["doc_with_placeholders"])
 if st.button("🧾 Générer le DOCX final", disabled=disabled):
     try:
-        # Recharger le doc (avec placeholders déjà remplacés) et insérer le tableau complet
         base_doc_bytes = st.session_state["doc_with_placeholders"]
         doc = Document(BytesIO(base_doc_bytes))
         insert_any_df_into_doc(doc, st.session_state["items_df"])
