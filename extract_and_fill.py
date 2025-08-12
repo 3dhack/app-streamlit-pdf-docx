@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix14
+# extract_and_fill.py — fix15
 import re
 import unicodedata
 from io import BytesIO
@@ -288,30 +288,37 @@ def apply_column_widths_and_alignments(table):
         table.autofit = False
     except Exception:
         pass
-    # preferred widths
-    col_widths = {
-        0: Inches(0.5),   # Pos
-        2: Inches(3.5),   # Désignation
-    }
-    for r_idx, r in enumerate(table.rows):
-        for idx, cell in enumerate(r.cells):
-            # widths
-            if idx in col_widths:
+    # Determine header cells and indices by name
+    header_cells = table.rows[0].cells
+    headers = [c.text.strip() for c in header_cells]
+    idx = {name: i for i, name in enumerate(headers)}
+    # Preferred widths
+    widths_in = {}
+    if "Pos" in idx: widths_in[idx["Pos"]] = Inches(0.5)
+    if "Désignation" in idx: widths_in[idx["Désignation"]] = Inches(4.5)
+    if "Qté" in idx: widths_in[idx["Qté"]] = Inches(0.8)
+    # Apply widths
+    for r in table.rows:
+        for j, cell in enumerate(r.cells):
+            if j in widths_in:
                 for tcPr in cell._tc.iter(qn('w:tcPr')):
                     tcW = tcPr.find(qn('w:tcW'))
                     if tcW is None:
                         tcW = OxmlElement('w:tcW'); tcPr.append(tcW)
                     tcW.set(qn('w:type'), 'dxa')
-                    dxa = int(col_widths[idx].inches * 1440)
+                    dxa = int(widths_in[j].inches * 1440)
                     tcW.set(qn('w:w'), str(dxa))
-            # alignment
+            # Alignment rules
             for p in cell.paragraphs:
-                if r_idx == 0:
+                # Header row
+                if r is table.rows[0]:
                     p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                     if p.runs: p.runs[0].bold = True
                 else:
-                    if idx in (0,2):
+                    if j in (idx.get("Pos", -1), idx.get("Référence", -1), idx.get("Désignation", -1)):
                         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+                    elif j == idx.get("Qté", -1):
+                        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
                     else:
                         if re.match(r"^\s*[0-9'’.,]+\s*$", p.text):
                             p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
@@ -319,17 +326,14 @@ def apply_column_widths_and_alignments(table):
                             p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
 
 def insert_paragraph_after(paragraph, text=""):
-    """Create and insert a paragraph immediately after the given paragraph; return the new paragraph."""
     new_p = OxmlElement('w:p')
     paragraph._p.addnext(new_p)
     from docx.text.paragraph import Paragraph
     para = Paragraph(new_p, paragraph._parent)
-    if text:
-        para.add_run(text)
+    if text: para.add_run(text)
     return para
 
 def insert_paragraph_after_element(elm, text="", align=None, bold=False, font_size_pt=None):
-    """Insert a paragraph immediately after the given XML element (e.g., table._element)."""
     new_p = OxmlElement('w:p')
     elm.addnext(new_p)
     from docx.text.paragraph import Paragraph
@@ -341,12 +345,9 @@ def insert_paragraph_after_element(elm, text="", align=None, bold=False, font_si
     return para
 
 def cleanup_extra_blank_paras(start_para, max_blank=2):
-    """Remove extra blank <w:p> following start_para so that at most `max_blank` subsequent blanks remain."""
-    # Count consecutive blanks after start_para and remove beyond max_blank
     blanks_kept = 0
     nxt = start_para._p.getnext()
     while nxt is not None and nxt.tag == qn('w:p'):
-        # check if empty
         texts = "".join(t.text or "" for t in nxt.iter(qn('w:t'))).strip()
         if texts == "":
             blanks_kept += 1
@@ -385,12 +386,11 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
     if anchor is not None:
         p1 = insert_paragraph_after(anchor, "")
         p2 = insert_paragraph_after(p1, "")
-        # move table element after p2
         p2._p.addnext(tbl._element)
 
     # 3) Add "Total TTC CHF xxx" right after the table
-    total_para = insert_paragraph_after_element(tbl._element,
-                                               text=(f"Total TTC CHF {total_ttc}" if total_ttc else "Total TTC CHF"),
+    total_text = f"Total TTC CHF {total_ttc}" if total_ttc else "Total TTC CHF"
+    total_para = insert_paragraph_after_element(tbl._element, text=total_text,
                                                align=WD_PARAGRAPH_ALIGNMENT.RIGHT,
                                                bold=True, font_size_pt=11)
 

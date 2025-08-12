@@ -1,4 +1,4 @@
-# streamlit_app.py — fix14 UI
+# streamlit_app.py — fix15 UI
 import streamlit as st
 import pandas as pd
 from io import BytesIO
@@ -11,7 +11,7 @@ from extract_and_fill import (
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Tableau avec bordures, Pos/Désignation alignées à gauche, Total TTC CHF sous le tableau + 2 retours à la ligne.")
+st.caption("Référence à gauche, Qté centré et étroite, Désignation élargie. Total TTC CHF sous le tableau + 2 retours à la ligne.")
 
 with st.sidebar:
     st.header("Étapes")
@@ -75,11 +75,15 @@ if st.button("🧾 Générer le DOCX final", disabled=not (st.session_state.get(
         total_ttc = (st.session_state["fields"] or {}).get("Total TTC CHF", "")
         final_doc = build_final_doc(base_doc_bytes, st.session_state["items_df"], total_ttc)
 
+        # File name: "Facture {Commande fournisseur}.docx"
+        commande = (st.session_state["fields"] or {}).get("Commande fournisseur", "").strip()
+        filename = f"Facture {commande}.docx" if commande else "Facture.docx"
+
         st.success("DOCX généré !")
         st.download_button(
             "Télécharger le DOCX généré",
             data=final_doc,
-            file_name="commande_remplie.docx",
+            file_name=filename,
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
     except Exception as e:
