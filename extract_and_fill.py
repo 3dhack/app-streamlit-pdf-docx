@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix9: borders, CF uppercase, "Notre référence"
+# extract_and_fill.py — fix10: trim "Notre référence" before No TVA + place table under "Cond. de paiement"
 import re
 import unicodedata
 from io import BytesIO
@@ -77,32 +77,44 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
+    """Parse key header fields from raw text; keep original accents/case when possible."""
     fields: Dict[str, str] = {}
-    t1 = _strip_accents(text).lower().replace("\xa0", " ")
 
-    # N° commande fournisseur
-    m = re.search(r"commande fournisseur n[°o]\s*([A-Z0-9\-_]+)", t1, flags=re.IGNORECASE)
-    if m:
-        cf = m.group(1).strip()
-        fields["N°commande fournisseur"] = cf.upper()   # force uppercase
+    # Use raw text for capturing strings with original case
+    raw = text.replace("\xa0", " ")
+    norm = _strip_accents(raw).lower()
+
+    # N° commande fournisseur (CF) — force uppercase
+    m_norm = re.search(r"commande fournisseur n[°o]\s*([A-Za-z0-9\-_]+)", norm, flags=re.IGNORECASE)
+    if m_norm:
+        cf = m_norm.group(1).strip()
+        fields["N°commande fournisseur"] = cf.upper()
         fields["Commande fournisseur"] = cf.upper()
 
-    # Notre référence : xxxxx
-    m = re.search(r"notre reference\s*:\s*([^\n\r]+)", t1, flags=re.IGNORECASE)
-    if m:
-        # capture original case from raw text by locating the substring around the match
-        # fallback: store lowercased captured group if mapping to original fails
-        value = m.group(1).strip()
-        # remove trailing noise
-        value = re.sub(r"\s+$", "", value)
-        fields["Notre référence"] = value
+    # Notre référence : take from raw, but trim before "No TVA"/"N° TVA"/"TVA"
+    m_line = re.search(r"(?i)(Notre\s+référence\s*:\s*)(.*)", raw)
+    if m_line:
+        after = m_line.group(2).strip()
+        after_norm = _strip_accents(after).lower()
+        cut_tokens = ["no tva", "n° tva", "n o tva", "tva", "no  tva"]
+        cut_idx = None
+        for tok in cut_tokens:
+            idx = after_norm.find(tok)
+            if idx != -1:
+                cut_idx = idx
+                break
+        if cut_idx is not None:
+            value = after[:cut_idx].strip(" -–—\t·:;")
+        else:
+            value = after.strip(" -–—\t·:;")
+        fields["Notre référence"] = value[:60]  # safeguard
 
     # Total TTC CHF
-    m = re.search(r"(montant total ttc chf|total ttc chf)\s*([0-9'’.,]+)", t1, flags=re.IGNORECASE)
+    m = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
     if m:
         fields["Total TTC CHF"] = m.group(2).strip()
     else:
-        m = re.search(r"([0-9'’.,]+)\s*(montant total ttc chf|total ttc chf)", t1, flags=re.IGNORECASE)
+        m = re.search(r"([0-9'’.,]+)\s*(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)", raw)
         if m:
             fields["Total TTC CHF"] = m.group(1).strip()
 
@@ -308,18 +320,26 @@ def replace_placeholders_everywhere(doc: Document, mapping: Dict[str, str]):
                     for variant in (f"« {key} »", f"«\xa0{key}\xa0»"):
                         _replace_in_paragraph(p, variant, str(val))
 
-def find_first_table(doc: Document):
-    try:
-        return doc.tables[0]
-    except IndexError:
-        return None
+def find_paragraph_anchor(doc: Document) -> Optional[object]:
+    """Find the paragraph containing 'Cond. de paiement' (accent-insensitive, plural accepted)."""
+    target_re = re.compile(r"cond\.\s*de\s*paiement[s]?", re.IGNORECASE)
+    for p in doc.paragraphs:
+        txt = _strip_accents(p.text).lower()
+        if target_re.search(txt):
+            return p
+    return None
 
-def clear_table_rows_but_header(table):
-    while len(table.rows) > 1:
-        table._element.remove(table.rows[1]._element)
+def insert_paragraph_after(paragraph, text=""):
+    """Insert a new paragraph after given paragraph and return it."""
+    new_p = OxmlElement('w:p')
+    paragraph._p.addnext(new_p)
+    from docx.text.paragraph import Paragraph
+    para = Paragraph(new_p, paragraph._parent)
+    if text:
+        para.add_run(text)
+    return para
 
 def set_table_borders(table):
-    # Apply Word "Table Grid" style if available, and enforce borders via oxml
     try:
         table.style = "Table Grid"
     except Exception:
@@ -330,54 +350,70 @@ def set_table_borders(table):
     for edge in ('top', 'left', 'bottom', 'right', 'insideH', 'insideV'):
         element = OxmlElement(f'w:{edge}')
         element.set(qn('w:val'), 'single')
-        element.set(qn('w:sz'), '8')      # 0.5 pt approx
+        element.set(qn('w:sz'), '8')
         element.set(qn('w:space'), '0')
         element.set(qn('w:color'), 'auto')
         tblBorders.append(element)
     tblPr.append(tblBorders)
     tbl.append(tblPr)
 
-def insert_any_df_into_doc(doc: Document, df: pd.DataFrame):
+def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame):
+    """Insert df as table exactly two blank lines below the 'Cond. de paiement' paragraph.
+       If anchor not found, append at end.
+    """
     if df is None or df.empty:
         return
     df = df.copy()
     df.columns = [str(c) for c in df.columns]
 
-    target = find_first_table(doc)
-    if target is not None and len(target.columns) == len(df.columns):
-        for i, c in enumerate(df.columns):
-            target.rows[0].cells[i].text = str(c)
-        clear_table_rows_but_header(target)
-        for _, row in df.iterrows():
-            cells = target.add_row().cells
-            for i, col in enumerate(df.columns):
-                val = "" if pd.isna(row[col]) else str(row[col])
-                cells[i].text = val
-                for para in cells[i].paragraphs:
-                    if para.runs:
-                        para.runs[0].font.size = Pt(10)
-                    if re.match(r"^\s*[0-9'’.,]+\s*$", val):
-                        para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
-                    else:
-                        para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
-        set_table_borders(target)
-    else:
+    anchor = find_paragraph_anchor(doc)
+    if anchor is None:
         tbl = doc.add_table(rows=1, cols=len(df.columns))
         for i, c in enumerate(df.columns):
             tbl.rows[0].cells[i].text = str(c)
         for _, row in df.iterrows():
             cells = tbl.add_row().cells
             for i, col in enumerate(df.columns):
-                val = "" if pd.isna(row[col]) else str(row[col])
-                cells[i].text = val
-                for para in cells[i].paragraphs:
-                    if para.runs:
-                        para.runs[0].font.size = Pt(10)
-                    if re.match(r"^\s*[0-9'’.,]+\s*$", val):
-                        para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
-                    else:
-                        para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+                cells[i].text = "" if pd.isna(row[col]) else str(row[col])
         set_table_borders(tbl)
+        return
+
+    # add two empty paragraphs
+    p1 = insert_paragraph_after(anchor, "")
+    p2 = insert_paragraph_after(p1, "")
+    # now insert table after p2
+    new_tbl = OxmlElement('w:tbl')
+    p2._p.addnext(new_tbl)
+    from docx.table import Table
+    tbl = Table(new_tbl, p2._parent)
+
+    # header row
+    hdr = tbl.add_row().cells
+    # ensure enough cells
+    while len(hdr) < len(df.columns):
+        hdr = tbl.add_row().cells  # workaround: build correct grid via rows
+
+    # First row for headers
+    for i, c in enumerate(df.columns):
+        hdr[i].text = str(c)
+
+    # add rows
+    for _, row in df.iterrows():
+        cells = tbl.add_row().cells
+        while len(cells) < len(df.columns):
+            cells = tbl.add_row().cells
+        for i, col in enumerate(df.columns):
+            val = "" if pd.isna(row[col]) else str(row[col])
+            cells[i].text = val
+            for para in cells[i].paragraphs:
+                if para.runs:
+                    para.runs[0].font.size = Pt(10)
+                if re.match(r"^\s*[0-9'’.,]+\s*$", val):
+                    para.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+                else:
+                    para.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
+    set_table_borders(tbl)
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[bytes, Dict[str, str], pd.DataFrame]:
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
@@ -412,3 +448,10 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
     replace_placeholders_everywhere(doc, fields)
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue(), fields, items_df
+
+# Public helpers re-exported for app
+def insert_items_table_at_position(doc_bytes: bytes, df: pd.DataFrame) -> bytes:
+    doc = Document(BytesIO(doc_bytes))
+    insert_df_two_lines_below_anchor(doc, df)
+    out = BytesIO(); doc.save(out); out.seek(0)
+    return out.getvalue()

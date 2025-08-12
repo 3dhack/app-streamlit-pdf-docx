@@ -1,18 +1,17 @@
-# streamlit_app.py — fix9 UI (borders + CF uppercase + Notre référence)
+# streamlit_app.py — fix10 UI: table under "Cond. de paiement" + trimmed "Notre référence"
 import streamlit as st
 import pandas as pd
 from io import BytesIO
-from docx import Document
 
 from extract_and_fill import (
     process_pdf_to_docx,
-    insert_any_df_into_doc,
+    insert_items_table_at_position,
 )
 
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("CF en majuscule, 'Notre référence' extrait du PDF, tableau avec bordures. Date du jour = aujourd'hui (Europe/Zurich).")
+st.caption("CF en majuscule, « Notre référence » coupée avant « No TVA ». Le tableau est inséré deux lignes sous « Cond. de paiement ».")
 
 with st.sidebar:
     st.header("Étapes")
@@ -63,7 +62,7 @@ if fields:
         "Total TTC CHF": fields.get("Total TTC CHF", ""),
     })
 
-st.subheader("Aperçu du tableau (après nettoyage & bordures)")
+st.subheader("Aperçu du tableau (tronqué & nettoyé)")
 items_df = st.session_state["items_df"]
 if items_df is not None and not items_df.empty:
     st.dataframe(items_df, use_container_width=True)
@@ -73,15 +72,12 @@ else:
 if st.button("🧾 Générer le DOCX final", disabled=not (st.session_state.get('tmpl_bytes') and st.session_state.get('doc_with_placeholders'))):
     try:
         base_doc_bytes = st.session_state["doc_with_placeholders"]
-        doc = Document(BytesIO(base_doc_bytes))
-        insert_any_df_into_doc(doc, st.session_state["items_df"])
+        final_doc = insert_items_table_at_position(base_doc_bytes, st.session_state["items_df"])
 
-        out = BytesIO()
-        doc.save(out); out.seek(0)
         st.success("DOCX généré !")
         st.download_button(
             "Télécharger le DOCX généré",
-            data=out.getvalue(),
+            data=final_doc,
             file_name="commande_remplie.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
