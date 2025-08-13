@@ -1,28 +1,23 @@
-# streamlit_app.py — fix21
+# streamlit_app.py — fix24b (clean)
 import streamlit as st
 from pathlib import Path
 from extract_and_fill import process_pdf_to_docx, build_final_doc
 
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Fix21 : reconstruction des lignes stoppée au 'Total CHF' de chaque article (anti-spillover).")
+st.caption("Fix24b : total intégré dans le tableau (ligne fusionnée, gras, double souligné, bordure supérieure double).")
 
 TEMPLATE_PATH = Path(__file__).parent / "template.docx"
 tmpl_bytes = TEMPLATE_PATH.read_bytes() if TEMPLATE_PATH.exists() else None
 
-with st.sidebar:
-    st.header("Étapes")
-    st.markdown("1. Uploader le **PDF**")
-    if tmpl_bytes is None:
-        st.markdown("2. Uploader le **modèle .docx** (ou place `template.docx` dans le repo)")
-    st.markdown("3. Générer le **DOCX**")
-
+# Uploaders
+pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
 if tmpl_bytes is None:
     up = st.file_uploader("Modèle Word (.docx)", type=["docx"])
-    if up: tmpl_bytes = up.read()
+    if up:
+        tmpl_bytes = up.read()
 
-pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
-
+# State
 for k in ["fields", "items_df", "doc_with_placeholders"]:
     if k not in st.session_state:
         st.session_state[k] = None
@@ -33,6 +28,7 @@ def _analyze(pdf_bytes, tmpl_bytes):
     st.session_state["items_df"] = items_df
     st.session_state["doc_with_placeholders"] = out_doc_bytes
 
+# Auto analyze
 if pdf_file and tmpl_bytes and st.session_state["fields"] is None:
     with st.spinner("Analyse du PDF..."):
         _analyze(pdf_file.read(), tmpl_bytes)

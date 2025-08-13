@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix21
+# extract_and_fill.py — fix24b (clean build)
 import re
 import unicodedata
 from io import BytesIO
@@ -17,7 +17,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 DATE_RE = re.compile(r"\b([0-3]?\d)[./-]([01]?\d)[./-]([12]\d{3})\b")
-
 COLUMNS_TARGET = ["Pos", "Référence", "Désignation", "Unité", "Qté", "Prix unit.", "Px u. Net", "Total CHF", "TVA"]
 
 def today_ch() -> str:
@@ -74,19 +73,19 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
-    """Parse key fields. 'Total TTC CHF' displayed under table uses the 'Total CHF' amount from the PDF."""
+    """Use 'Total CHF' for the total displayed under the table; keep 'Montant Total TTC CHF' only for reference."""
     fields: Dict[str, str] = {}
     raw = text.replace("\xa0", " ")
     norm = _strip_accents(raw).lower()
 
-    # CF uppercase
+    # Commande fournisseur (CF-..)
     m_norm = re.search(r"commande fournisseur n[°o]\s*([A-Za-z0-9\-_]+)", norm, flags=re.IGNORECASE)
     if m_norm:
         cf = m_norm.group(1).strip().upper()
         fields["N°commande fournisseur"] = cf
         fields["Commande fournisseur"] = cf
 
-    # Notre référence (trim before TVA tokens)
+    # Notre référence (stop before any TVA token)
     m_line = re.search(r"(?i)(Notre\s+référence\s*:\s*)(.*)", raw)
     if m_line:
         after = m_line.group(2).strip()
@@ -100,7 +99,7 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         value = after[:cut_idx].strip(" -–—\t·:;") if cut_idx is not None else after.strip(" -–—\t·:;")
         fields["Notre référence"] = value[:60]
 
-    # Total CHF (HT) — this is the value we will use for "Total TTC CHF" display as per requirement
+    # Total CHF (used for display)
     total_chf = None
     m = re.search(r"(?i)Total\s+CHF\s*([0-9'’.,]+)", raw)
     if m:
@@ -110,7 +109,7 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         if m:
             total_chf = m.group(1).strip()
 
-    # Keep "Montant Total TTC CHF" just for reference if present
+    # Keep Montant Total TTC CHF for reference if present
     m_ttc = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
     if m_ttc:
         fields["Montant Total TTC CHF (PDF)"] = m_ttc.group(2).strip()
@@ -146,18 +145,13 @@ def latest_receipt_date_from_text(text: str) -> Optional[str]:
     if not dates: return None
     return max(dates).strftime("%d.%m.%Y")
 
-
 def reconstruct_items_from_text(text: str) -> pd.DataFrame:
     """
-    Reconstruction robuste (fix22) :
-    - Débute uniquement sur Pos multiples de 10 (10/20/30...).
-    - Accumule jusqu'à obtenir un item complet (avec 'Total CHF'), puis finalise immédiatement.
-    - **Ne s'arrête plus** sur 'Tarif douanier', 'Pays d'origine', 'Indice :', 'Délai de réception :' — ces lignes sont simplement ignorées.
-    - S'arrête seulement sur les zones de fin: Récapitulation / Montant total / Total TTC / Code TVA / Taux...
+    Start strictly at Pos multiples of 10; accumulate just enough until Total CHF is captured,
+    then finalize the item immediately. Ignore interstitial meta lines.
     """
     unit_words = r"(PC|PCE|PCS|PIECE|PIECES|UN|UNITES?|KG|G|MG|L|ML|M|MM|CM)"
     money = r"[0-9'’.,]+"
-
     full_item_re = re.compile(
         rf"^\s*(?P<pos>\d{{1,4}})\s+"
         rf"(?P<ref>\d{{3,}})\s+"
@@ -171,25 +165,16 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
         re.IGNORECASE
     )
     start_re = re.compile(r"^\s*(?P<pos>\d{1,4})\s+(?P<ref>\d{3,})\b")
-
-    # Only these end the items altogether
-    stop_cues = (
-        "récapitulation", "recapitulation", "code tva",
-        "montant total", "total ttc", "taux"
-    )
-    # These are ignorable lines inside/between items
-    junk_prefixes = (
-        "tarif douanier", "pays d'origine", "indice :", "delai de reception :"
-    )
+    stop_cues = ("récapitulation", "recapitulation", "code tva", "montant total", "total ttc", "taux")
+    junk_prefixes = ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")
 
     rows: List[Dict[str, str]] = []
     buffer = ""
     buffering = False
 
-    def try_flush(buf: str):
+    def try_flush(buf: str) -> bool:
         m = full_item_re.match(buf.strip())
-        if not m:
-            return False
+        if not m: return False
         gd = m.groupdict()
         try:
             if int(gd["pos"]) % 10 != 0:
@@ -211,27 +196,20 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
 
     for raw_ln in text.splitlines():
         ln = raw_ln.strip()
-        if not ln:
-            continue
+        if not ln: continue
         low = _strip_accents(ln).lower()
 
-        # End section?
         if any(low.startswith(p) for p in stop_cues):
-            # Abandon any partial (never flush unless complete)
             break
-
-        # Skip ignorable meta lines anywhere
         if any(low.startswith(p) for p in junk_prefixes):
             continue
 
-        # Full item on one line
         if full_item_re.match(ln):
             try_flush(ln)
             buffering = False
             buffer = ""
             continue
 
-        # Start of a new item?
         m_start = start_re.match(ln)
         if m_start:
             try:
@@ -245,9 +223,7 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
             except Exception:
                 continue
 
-        # Continuation while buffering
         if buffering:
-            # Again, ignore meta lines
             if any(low.startswith(p) for p in junk_prefixes):
                 continue
             buffer = (buffer + " " + ln).strip()
@@ -369,6 +345,7 @@ def _set_border(el, side, val='single', sz='8', space='0', color='auto'):
     border.set(qn('w:color'), color)
 
 def set_table_borders_horizontal_only(table):
+    """Outer frame + inside horizontals only; remove inside verticals."""
     tbl = table._element
     tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement('w:tblPr')
     tblBorders = tblPr.find(qn('w:tblBorders'))
@@ -459,7 +436,7 @@ def insert_paragraph_after_element(elm, text="", align=None, bold=False, font_si
     para = Paragraph(new_p, elm.getparent())
     run = para.add_run(text)
     if bold: run.bold = True
-    if font_size_pt: run.font.size = Pt(11)
+    if font_size_pt: run.font.size = Pt(font_size_pt)
     if align is not None: para.alignment = align
     return para
 
@@ -480,15 +457,8 @@ def cleanup_extra_blank_paras(start_para, max_blank=2):
             break
         nxt = nxt.getnext()
 
-
 def add_total_row_to_table(table, label: str, amount: str):
-    """
-    Append a 'total' row to the table:
-    - Merge all cells from first to penultimate into one label cell.
-    - Put amount into the last cell (Total CHF column).
-    - Right-align, bold, and double-underline both label and amount.
-    - Add a top DOUBLE border across the total row.
-    """
+    """Append a total row inside the table with merged label cells and double underline."""
     n_cols = len(table.rows[0].cells) if table.rows else 0
     if n_cols == 0:
         return
@@ -505,17 +475,11 @@ def add_total_row_to_table(table, label: str, amount: str):
         label_cell = cells[0]
         amount_cell = cells[0]
 
-    # Set texts
-    label_text = label.strip()
+    label_cell.text = label.strip()
     amount_text = (amount or "").strip()
-    # If amount is empty, avoid trailing space
     if amount_text:
-        label_cell.text = label_text
         amount_cell.text = amount_text
-    else:
-        label_cell.text = label_text
 
-    # Style paragraphs: right align, bold, double underline
     for c in (label_cell, amount_cell):
         for p in c.paragraphs:
             p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
@@ -523,10 +487,8 @@ def add_total_row_to_table(table, label: str, amount: str):
                 p.runs[0].bold = True
                 p.runs[0].font.underline = WD_UNDERLINE.DOUBLE
 
-    # Add top DOUBLE border across the total row
-    from docx.oxml import OxmlElement
-    from docx.oxml.ns import qn
-    def _set_border(tcBorders, side, val='single', sz='12', color='auto'):
+    # Add a strong double top border on the total row
+    def _set_border(tcBorders, side, val='single', sz='18', color='auto'):
         el = tcBorders.find(qn(f'w:{side}'))
         if el is None:
             el = OxmlElement(f'w:{side}')
@@ -536,20 +498,19 @@ def add_total_row_to_table(table, label: str, amount: str):
         el.set(qn('w:color'), color)
         el.set(qn('w:space'), '0')
 
-    for idx, c in enumerate(row.cells):
+    for c in row.cells:
         tc = c._tc
         tcPr = tc.get_or_add_tcPr()
         tcBorders = tcPr.find(qn('w:tcBorders'))
         if tcBorders is None:
-            tcBorders = OxmlElement('w:tcBorders')
-            tcPr.append(tcBorders)
-        _set_border(tcBorders, 'top', val='double', sz='18')  # strong double top border
-        # keep existing left/right rules from table (outer frame only)
-        # bottom stays as defined by table-level borders
+            tcBorders = OxmlElement('w:tcBorders'); tcPr.append(tcBorders)
+        _set_border(tcBorders, 'top', val='double', sz='18')
+
 def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc: Optional[str] = ""):
     if df is None or df.empty: return
     df = df.copy(); df.columns = [str(c) for c in df.columns]
 
+    # Build table at end then move it near anchor
     tbl = doc.add_table(rows=1, cols=len(df.columns))
     hdr_cells = tbl.rows[0].cells
     for i, c in enumerate(df.columns):
@@ -562,33 +523,32 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
             for para in cells[i].paragraphs:
                 if para.runs: para.runs[0].font.size = Pt(10)
 
+    # Styling
     shade_header_row(tbl, fill_hex="EEF3FF")
     set_table_borders_horizontal_only(tbl)
     apply_column_widths_and_alignments(tbl)
     tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
 
+    # Move table 2 lines below anchor
     anchor = find_paragraph_anchor(doc)
     if anchor is not None:
         p1 = insert_paragraph_after(anchor, "")
         p2 = insert_paragraph_after(p1, "")
         p2._p.addnext(tbl._element)
 
-    total_text = f"Total TTC CHF {total_ttc}" if total_ttc else "Total TTC CHF"
-    add_total_row_to_table(tbl, label='Total TTC CHF', amount=total_ttc or '')
-    # (total inside table, not as paragraph)
-    #total_para = insert_paragraph_after_element(tbl._element, text=total_text,
-                                               align=WD_PARAGRAPH_ALIGNMENT.RIGHT,
-                                               bold=True, font_size_pt=11)
+    # Add total row inside the table
+    add_total_row_to_table(tbl, label="Total TTC CHF", amount=total_ttc or "")
 
-    b1 = insert_paragraph_after(total_para, "")
-    b2 = insert_paragraph_after(b1, "")
-    cleanup_extra_blank_paras(total_para, max_blank=2)
+    # Exactly two blank lines after the table
+    b1 = insert_paragraph_after_element(tbl._element, text="")
+    b2 = insert_paragraph_after_element(b1._p, text="")
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
     fields["date du jour"] = today_ch()
 
+    # Délai de réception max (alias Livré le)
     from_text = []
     norm = _strip_accents(text).lower().replace("\xa0"," ")
     for ln in [l.strip() for l in norm.splitlines() if l.strip()]:
@@ -605,6 +565,7 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
         fields["Délai de réception"] = max_dt
         fields["Délai de livraison"] = max_dt
 
+    # Items
     items_df = None
     if tables:
         items_df = combine_detected_tables(tables)
@@ -612,6 +573,7 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
         items_df = reconstruct_items_from_text(text)
     items_df = clean_items_df_keep_full(items_df)
 
+    # Build doc with placeholders then title
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
     suffix = compute_facture_suffix(fields)
