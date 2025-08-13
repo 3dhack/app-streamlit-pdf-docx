@@ -11,7 +11,7 @@ import pandas as pd
 from docx import Document
 from docx.shared import Pt, Inches
 from docx.enum.text import WD_PARAGRAPH_ALIGNMENT, WD_UNDERLINE
-from docx.enum.table import WD_TABLE_ALIGNMENT
+from docx.enum.table import WD_TABLE_ALIGNMENT, WD_ALIGN_VERTICAL
 
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
@@ -375,6 +375,11 @@ def apply_column_widths_and_alignments(table):
 
     for r in table.rows:
         for j, cell in enumerate(r.cells):
+            # Vertical center for every cell
+            try:
+                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            except Exception:
+                pass
             # Set widths
             if j in widths_in:
                 for tcPr in cell._tc.iter(qn('w:tcPr')):
@@ -474,6 +479,10 @@ def add_total_row_to_table(table, label: str, amount: str):
         el.set(qn('w:space'), '0')
 
     for c in row.cells:
+        try:
+            c.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+        except Exception:
+            pass
         tc = c._tc
         tcPr = tc.get_or_add_tcPr()
         tcBorders = tcPr.find(qn('w:tcBorders'))

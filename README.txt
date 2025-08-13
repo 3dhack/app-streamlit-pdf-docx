@@ -45,3 +45,7 @@ Fix36:
 - Masque **toutes les lignes d'information** tant qu'aucun PDF n'est uploadé :
   - plus d'"Aperçu du tableau" ni "Le tableau sera reconstruit..." avant upload,
   - le message d'aide pour la génération n'apparaît que si un PDF est présent.
+
+
+Fix37:
+- **Centrage vertical** du texte dans **toutes les cellules** du tableau (en-tête, lignes de données et total).
