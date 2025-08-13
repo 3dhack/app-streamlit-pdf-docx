@@ -62,13 +62,14 @@ if pdf_file and st.button("🔁 Réanalyser"):
         st.warning("Fournis le PDF et un modèle (ou `template.docx`).")
 
 
+
 fields = st.session_state.get("fields") or {}
 if (pdf_file or fields):
     if fields:
         st.subheader("Champs détectés")
         import pandas as _pd
+        import streamlit as _st
 
-        # Order keys for nicer reading
         preferred_order = [
             "N°commande fournisseur",
             "Commande fournisseur",
@@ -79,7 +80,6 @@ if (pdf_file or fields):
             "Total TTC CHF",
             "Montant Total TTC CHF (PDF)",
         ]
-        # Build ordered list
         rows = []
         for key in preferred_order:
             if key in fields:
@@ -89,9 +89,30 @@ if (pdf_file or fields):
                 rows.append({"Champ": key, "Valeur": str(val)})
 
         df_fields = _pd.DataFrame(rows, columns=["Champ", "Valeur"])
-        st.dataframe(df_fields, use_container_width=True, hide_index=True)
 
-        # Hint if totals differ
+        edited = _st.data_editor(
+            df_fields,
+            use_container_width=True,
+            hide_index=True,
+            disabled=["Champ"],  # on n'édite QUE les valeurs
+            column_config={
+                "Champ": _st.column_config.TextColumn("Champ", width="small"),
+                "Valeur": _st.column_config.TextColumn("Valeur", width="medium"),
+            },
+            key="fields_editor",
+        )
+
+        # Repenser le dict `fields` à partir des valeurs éditées
+        edited_fields = dict(fields)  # copie
+        try:
+            for _, row in edited.iterrows():
+                edited_fields[str(row["Champ"])] = str(row["Valeur"])
+        except Exception:
+            # edited peut déjà être dict-like si Streamlit change de structure
+            pass
+        st.session_state["fields"] = edited_fields
+        fields = edited_fields  # pour la suite
+
         pdf_ttc = fields.get("Montant Total TTC CHF (PDF)")
         used_ttc = fields.get("Total TTC CHF")
         if pdf_ttc and used_ttc and str(pdf_ttc) != str(used_ttc):

@@ -73,3 +73,9 @@ Fix42:
   - tableau propre (2 colonnes **Champ / Valeur**), ordre des infos pertinent,
   - expander pour afficher le **JSON brut** si besoin,
   - note informative si le **Total TTC CHF** utilisé diffère du **Montant Total TTC CHF (PDF)**.
+
+
+Fix43:
+- **Colonne "Champ" réduite** (width="small") et **édition directe** des valeurs via `st.data_editor` (
+  colonne "Champ" verrouillée, "Valeur" modifiable).
+- Les modifications sont **réinjectées** dans `st.session_state["fields"]` pour être prises en compte lors de la génération.
