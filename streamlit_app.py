@@ -1,9 +1,10 @@
-# streamlit_app.py — fix24b (clean)
+# streamlit_app.py — fix27
 import streamlit as st
 from pathlib import Path
 from extract_and_fill import process_pdf_to_docx, build_final_doc
 
-import tempfile, subprocess, sys, platform
+import tempfile, subprocess
+from pathlib import Path as _Path
 
 def convert_docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes | None:
     """
@@ -15,15 +16,15 @@ def convert_docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes | None:
     """
     try:
         with tempfile.TemporaryDirectory() as tmpdir:
-            docx_path = Path(tmpdir) / "out.docx"
-            pdf_path  = Path(tmpdir) / "out.pdf"
+            docx_path = _Path(tmpdir) / "out.docx"
+            pdf_path  = _Path(tmpdir) / "out.pdf"
             with open(docx_path, "wb") as f:
                 f.write(docx_bytes)
 
             # Strategy 1: soffice (LibreOffice)
             try:
                 subprocess.run(
-                    ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(Path(tmpdir)), str(docx_path)],
+                    ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(_Path(tmpdir)), str(docx_path)],
                     check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60
                 )
                 if pdf_path.exists():
@@ -39,17 +40,15 @@ def convert_docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes | None:
                 )
                 if pdf_path.exists():
                     return pdf_path.read_bytes()
-                # unoconv may name the file with same base
-                for p in Path(tmpdir).glob("*.pdf"):
+                for p in _Path(tmpdir).glob("*.pdf"):
                     return p.read_bytes()
             except Exception:
                 pass
 
-            # Strategy 3: docx2pdf (best on Windows/Mac)
+            # Strategy 3: docx2pdf
             try:
                 from docx2pdf import convert as docx2pdf_convert
-                # On non-Windows/macOS this may fail if MS Word is not present
-                out_tmp_pdf = Path(tmpdir) / "out_docx2pdf.pdf"
+                out_tmp_pdf = _Path(tmpdir) / "out_docx2pdf.pdf"
                 docx2pdf_convert(str(docx_path), str(out_tmp_pdf))
                 if out_tmp_pdf.exists():
                     return out_tmp_pdf.read_bytes()
@@ -60,22 +59,18 @@ def convert_docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes | None:
     except Exception:
         return None
 
-
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 st.title("PDF → DOCX : Remplissage automatique")
-
 
 TEMPLATE_PATH = Path(__file__).parent / "template.docx"
 tmpl_bytes = TEMPLATE_PATH.read_bytes() if TEMPLATE_PATH.exists() else None
 
-# Uploaders
 pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
 if tmpl_bytes is None:
     up = st.file_uploader("Modèle Word (.docx)", type=["docx"])
     if up:
         tmpl_bytes = up.read()
 
-# State
 for k in ["fields", "items_df", "doc_with_placeholders"]:
     if k not in st.session_state:
         st.session_state[k] = None
@@ -86,7 +81,6 @@ def _analyze(pdf_bytes, tmpl_bytes):
     st.session_state["items_df"] = items_df
     st.session_state["doc_with_placeholders"] = out_doc_bytes
 
-# Auto analyze
 if pdf_file and tmpl_bytes and st.session_state["fields"] is None:
     with st.spinner("Analyse du PDF..."):
         _analyze(pdf_file.read(), tmpl_bytes)
@@ -96,7 +90,7 @@ if st.button("🔁 Réanalyser"):
         with st.spinner("Ré-analyse du PDF..."):
             _analyze(pdf_file.read(), tmpl_bytes)
     else:
-        st.warning("Fournis le PDF.")
+        st.warning("Fournis le PDF et un modèle (ou `template.docx`).")
 
 fields = st.session_state.get("fields") or {}
 if fields:
@@ -118,5 +112,11 @@ if st.button("🧾 Générer le DOCX/PDF", disabled=not (tmpl_bytes and st.sessi
     commande = (st.session_state["fields"] or {}).get("Commande fournisseur", "").strip()
     filename = f"Facture {commande}.docx" if commande else "Facture.docx"
 
-    st.success("DOCX généré !")
-    st.download_button("Télécharger le DOCX généré", data=final_doc, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    st.success("Fichiers générés !")
+    st.download_button("🟦 Télécharger le DOCX", data=final_doc, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+
+    pdf_bytes = convert_docx_bytes_to_pdf_bytes(final_doc)
+    if pdf_bytes:
+        st.download_button("📄 Télécharger le PDF", data=pdf_bytes, file_name=filename.replace(".docx", ".pdf"), mime="application/pdf")
+    else:
+        st.info("Conversion PDF indisponible sur cet hébergement. Sur un VPS, installe LibreOffice (soffice) ou unoconv pour activer l'export PDF.")

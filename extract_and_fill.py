@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix24b (clean build)
+# extract_and_fill.py — fix27
 import re
 import unicodedata
 from io import BytesIO
@@ -73,19 +73,17 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
-    """Use 'Total CHF' for the total displayed under the table; keep 'Montant Total TTC CHF' only for reference."""
+    """Use 'Total CHF' for the total displayed; keep 'Montant Total TTC CHF' only for reference."""
     fields: Dict[str, str] = {}
     raw = text.replace("\xa0", " ")
     norm = _strip_accents(raw).lower()
 
-    # Commande fournisseur (CF-..)
     m_norm = re.search(r"commande fournisseur n[°o]\s*([A-Za-z0-9\-_]+)", norm, flags=re.IGNORECASE)
     if m_norm:
         cf = m_norm.group(1).strip().upper()
         fields["N°commande fournisseur"] = cf
         fields["Commande fournisseur"] = cf
 
-    # Notre référence (stop before any TVA token)
     m_line = re.search(r"(?i)(Notre\s+référence\s*:\s*)(.*)", raw)
     if m_line:
         after = m_line.group(2).strip()
@@ -99,7 +97,6 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         value = after[:cut_idx].strip(" -–—\t·:;") if cut_idx is not None else after.strip(" -–—\t·:;")
         fields["Notre référence"] = value[:60]
 
-    # Total CHF (used for display)
     total_chf = None
     m = re.search(r"(?i)Total\s+CHF\s*([0-9'’.,]+)", raw)
     if m:
@@ -109,7 +106,6 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         if m:
             total_chf = m.group(1).strip()
 
-    # Keep Montant Total TTC CHF for reference if present
     m_ttc = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
     if m_ttc:
         fields["Montant Total TTC CHF (PDF)"] = m_ttc.group(2).strip()
@@ -123,33 +119,8 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
 
     return fields
 
-def _parse_date_str(s: str) -> Optional[datetime]:
-    m = DATE_RE.search(s)
-    if not m: return None
-    d, mth, y = m.groups()
-    try: return datetime(int(y), int(mth), int(d))
-    except ValueError: return None
-
-def latest_receipt_date_from_text(text: str) -> Optional[str]:
-    dates = []
-    norm = _strip_accents(text).lower().replace("\xa0", " ")
-    lines = [l.strip() for l in norm.splitlines() if l.strip()]
-    for ln in lines:
-        if "delai de reception" in ln:
-            dt = _parse_date_str(ln); 
-            if dt: dates.append(dt)
-    if not dates:
-        for m in re.finditer(r"delai de reception.{0,30}?([0-3]?\d[./-][01]?\d[./-][12]\d{3})", norm):
-            dt = _parse_date_str(m.group(0))
-            if dt: dates.append(dt)
-    if not dates: return None
-    return max(dates).strftime("%d.%m.%Y")
-
 def reconstruct_items_from_text(text: str) -> pd.DataFrame:
-    """
-    Start strictly at Pos multiples of 10; accumulate just enough until Total CHF is captured,
-    then finalize the item immediately. Ignore interstitial meta lines.
-    """
+    """Start at Pos multiples of 10; accumulate until Total CHF captured; ignore meta lines; stop at recap/total sections."""
     unit_words = r"(PC|PCE|PCS|PIECE|PIECES|UN|UNITES?|KG|G|MG|L|ML|M|MM|CM)"
     money = r"[0-9'’.,]+"
     full_item_re = re.compile(
@@ -165,6 +136,7 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
         re.IGNORECASE
     )
     start_re = re.compile(r"^\s*(?P<pos>\d{1,4})\s+(?P<ref>\d{3,})\b")
+
     stop_cues = ("récapitulation", "recapitulation", "code tva", "montant total", "total ttc", "taux")
     junk_prefixes = ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")
 
@@ -246,7 +218,7 @@ def combine_detected_tables(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame
             if dfc[first_col].astype(str).str.fullmatch(r"\d{1,4}").fillna(False).any():
                 dfc = dfc.rename(columns={first_col: "Pos"})
         if "Pos" in dfc.columns:
-            for _, r in dfc.iterrows():
+            for _, r in df.iterrows():
                 pos = str(r["Pos"]).strip()
                 if pos.isdigit() and int(pos) % 10 == 0:
                     candidate_rows.append(r)
@@ -319,7 +291,7 @@ def set_facture_title(doc: Document, suffix: Optional[str]):
             p.text = ""
             run = p.add_run(f"Facture {suffix}" if suffix else "Facture")
             run.bold = True
-            run.font.size = Pt(14)
+            run.font.size = Pt(12)
     for p in doc.paragraphs:
         set_para(p)
     for section in doc.sections:
@@ -440,25 +412,8 @@ def insert_paragraph_after_element(elm, text="", align=None, bold=False, font_si
     if align is not None: para.alignment = align
     return para
 
-def cleanup_extra_blank_paras(start_para, max_blank=2):
-    blanks_kept = 0
-    nxt = start_para._p.getnext()
-    while nxt is not None and nxt.tag == qn('w:p'):
-        texts = "".join(t.text or "" for t in nxt.iter(qn('w:t'))).strip()
-        if texts == "":
-            blanks_kept += 1
-            if blanks_kept > max_blank:
-                parent = nxt.getparent()
-                to_remove = nxt
-                nxt = nxt.getnext()
-                parent.remove(to_remove)
-                continue
-        else:
-            break
-        nxt = nxt.getnext()
-
 def add_total_row_to_table(table, label: str, amount: str):
-    """Append a total row inside the table with merged label cells and double underline."""
+    """Append a total row inside the table with merged label cells and double underline + top double border."""
     n_cols = len(table.rows[0].cells) if table.rows else 0
     if n_cols == 0:
         return
@@ -487,7 +442,7 @@ def add_total_row_to_table(table, label: str, amount: str):
                 p.runs[0].bold = True
                 p.runs[0].font.underline = WD_UNDERLINE.DOUBLE
 
-    # Add a strong double top border on the total row
+    # Double top border on total row
     def _set_border(tcBorders, side, val='single', sz='18', color='auto'):
         el = tcBorders.find(qn(f'w:{side}'))
         if el is None:
@@ -505,6 +460,13 @@ def add_total_row_to_table(table, label: str, amount: str):
         if tcBorders is None:
             tcBorders = OxmlElement('w:tcBorders'); tcPr.append(tcBorders)
         _set_border(tcBorders, 'top', val='double', sz='18')
+
+def find_paragraph_anchor(doc: Document) -> Optional[object]:
+    target_re = re.compile(r"cond\.\s*de\s*paiement[s]?", re.IGNORECASE)
+    for p in doc.paragraphs:
+        txt = _strip_accents(p.text).lower()
+        if target_re.search(txt): return p
+    return None
 
 def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc: Optional[str] = ""):
     if df is None or df.empty: return
@@ -539,9 +501,8 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
     # Add total row inside the table
     add_total_row_to_table(tbl, label="Total TTC CHF", amount=total_ttc or "")
 
-    # Exactly two blank lines after the table
-    b1 = insert_paragraph_after_element(tbl._element, text="")
-    b2 = insert_paragraph_after_element(b1._p, text="")
+    # EXACTLY ONE blank line after table
+    insert_paragraph_after_element(tbl._element, text="")
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
