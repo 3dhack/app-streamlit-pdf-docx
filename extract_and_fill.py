@@ -146,13 +146,14 @@ def latest_receipt_date_from_text(text: str) -> Optional[str]:
     if not dates: return None
     return max(dates).strftime("%d.%m.%Y")
 
+
 def reconstruct_items_from_text(text: str) -> pd.DataFrame:
     """
-    Robust reconstruction:
-    - Detect item start only when Pos is multiple of 10.
-    - Accumulate across as few lines as necessary until a complete item is parsed.
-    - The moment we capture 'Total CHF' (i.e., total price), we finalize the item and stop accumulating.
-      => avoids spillover of text from next page.
+    Reconstruction robuste (fix22) :
+    - Débute uniquement sur Pos multiples de 10 (10/20/30...).
+    - Accumule jusqu'à obtenir un item complet (avec 'Total CHF'), puis finalise immédiatement.
+    - **Ne s'arrête plus** sur 'Tarif douanier', 'Pays d'origine', 'Indice :', 'Délai de réception :' — ces lignes sont simplement ignorées.
+    - S'arrête seulement sur les zones de fin: Récapitulation / Montant total / Total TTC / Code TVA / Taux...
     """
     unit_words = r"(PC|PCE|PCS|PIECE|PIECES|UN|UNITES?|KG|G|MG|L|ML|M|MM|CM)"
     money = r"[0-9'’.,]+"
@@ -169,16 +170,19 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
         rf"(?:\s+(?P<tva>\d{{2,3}}))?\s*$",
         re.IGNORECASE
     )
-
     start_re = re.compile(r"^\s*(?P<pos>\d{1,4})\s+(?P<ref>\d{3,})\b")
 
-    drop_prefixes = (
-        "tarif douanier", "pays d'origine", "indice :", "delai de reception :",
-        "récapitulation", "recapitulation", "code tva", "montant total", "total ttc", "montant", "taux",
+    # Only these end the items altogether
+    stop_cues = (
+        "récapitulation", "recapitulation", "code tva",
+        "montant total", "total ttc", "taux"
+    )
+    # These are ignorable lines inside/between items
+    junk_prefixes = (
+        "tarif douanier", "pays d'origine", "indice :", "delai de reception :"
     )
 
     rows: List[Dict[str, str]] = []
-
     buffer = ""
     buffering = False
 
@@ -211,20 +215,23 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
             continue
         low = _strip_accents(ln).lower()
 
-        if any(low.startswith(p) for p in drop_prefixes):
-            if buffering:
-                buffering = False
-                buffer = ""
+        # End section?
+        if any(low.startswith(p) for p in stop_cues):
+            # Abandon any partial (never flush unless complete)
             break
 
-        # Full item on a single line
+        # Skip ignorable meta lines anywhere
+        if any(low.startswith(p) for p in junk_prefixes):
+            continue
+
+        # Full item on one line
         if full_item_re.match(ln):
             try_flush(ln)
             buffering = False
             buffer = ""
             continue
 
-        # Start of item?
+        # Start of a new item?
         m_start = start_re.match(ln)
         if m_start:
             try:
@@ -238,9 +245,10 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
             except Exception:
                 continue
 
-        # If buffering, add lines until full match is achieved (then finalize)
+        # Continuation while buffering
         if buffering:
-            if any(low.startswith(p) for p in ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")):
+            # Again, ignore meta lines
+            if any(low.startswith(p) for p in junk_prefixes):
                 continue
             buffer = (buffer + " " + ln).strip()
             if try_flush(buffer):
