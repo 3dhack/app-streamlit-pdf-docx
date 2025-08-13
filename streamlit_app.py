@@ -96,7 +96,7 @@ if st.button("🔁 Réanalyser"):
         with st.spinner("Ré-analyse du PDF..."):
             _analyze(pdf_file.read(), tmpl_bytes)
     else:
-        st.warning("Fournis le PDF et un modèle (ou `template.docx`).")
+        st.warning("Fournis le PDF.")
 
 fields = st.session_state.get("fields") or {}
 if fields:
