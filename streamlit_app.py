@@ -63,6 +63,7 @@ if pdf_file and st.button("🔁 Réanalyser"):
 
 
 
+
 fields = st.session_state.get("fields") or {}
 if (pdf_file or fields):
     if fields:
@@ -71,21 +72,28 @@ if (pdf_file or fields):
         import streamlit as _st
 
         preferred_order = [
-            "N°commande fournisseur",
-            "Commande fournisseur",
+            # "N° de Commande fournisseur" (masquée), "N°commande fournisseur" (masquée)
             "Notre référence",
             "date du jour",
-            "Délai de réception",
             "Délai de livraison",
             "Total TTC CHF",
             "Montant Total TTC CHF (PDF)",
         ]
+
+        # Filter out unwanted rows (support both key variants)
+        hide_keys = {
+            "Commande fournisseur",
+            "N° de Commande fournisseur",
+            "N°commande fournisseur",
+            "Délai de réception",
+        }
+
         rows = []
         for key in preferred_order:
-            if key in fields:
+            if key in fields and key not in hide_keys:
                 rows.append({"Champ": key, "Valeur": str(fields[key])})
         for key, val in fields.items():
-            if key not in preferred_order:
+            if key not in preferred_order and key not in hide_keys:
                 rows.append({"Champ": key, "Valeur": str(val)})
 
         df_fields = _pd.DataFrame(rows, columns=["Champ", "Valeur"])
@@ -94,33 +102,23 @@ if (pdf_file or fields):
             df_fields,
             use_container_width=True,
             hide_index=True,
-            disabled=["Champ"],  # on n'édite QUE les valeurs
+            disabled=["Champ"],
             column_config={
-                "Champ": _st.column_config.TextColumn("Champ", width="small"),
-                "Valeur": _st.column_config.TextColumn("Valeur", width="medium"),
+                "Champ": _st.column_config.TextColumn("Champ", width=80),   # smaller
+                "Valeur": _st.column_config.TextColumn("Valeur", width="large"),
             },
             key="fields_editor",
         )
 
-        # Repenser le dict `fields` à partir des valeurs éditées
-        edited_fields = dict(fields)  # copie
+        # Rebuild fields dict from edits
+        edited_fields = dict(fields)
         try:
             for _, row in edited.iterrows():
                 edited_fields[str(row["Champ"])] = str(row["Valeur"])
         except Exception:
-            # edited peut déjà être dict-like si Streamlit change de structure
             pass
         st.session_state["fields"] = edited_fields
-        fields = edited_fields  # pour la suite
-
-        pdf_ttc = fields.get("Montant Total TTC CHF (PDF)")
-        used_ttc = fields.get("Total TTC CHF")
-        if pdf_ttc and used_ttc and str(pdf_ttc) != str(used_ttc):
-            st.info(f"Note : le total affiché dans le document est basé sur **Total CHF** (→ « Total TTC CHF » = {used_ttc}). Le montant « Montant Total TTC CHF (PDF) » ({pdf_ttc}) reste indiqué pour référence.")
-
-        with st.expander("Voir le JSON brut"):
-            import json as _json
-            st.code(_json.dumps(fields, ensure_ascii=False, indent=2))
+        fields = edited_fields
 
 items_df = st.session_state.get("items_df")
 if (pdf_file or items_df is not None):

@@ -79,3 +79,9 @@ Fix43:
 - **Colonne "Champ" réduite** (width="small") et **édition directe** des valeurs via `st.data_editor` (
   colonne "Champ" verrouillée, "Valeur" modifiable).
 - Les modifications sont **réinjectées** dans `st.session_state["fields"]` pour être prises en compte lors de la génération.
+
+
+Fix45:
+- **Colonne "Champ" encore réduite** (width=80).
+- **Masque** les lignes **"N° de Commande fournisseur"**, **"N°commande fournisseur"** et **"Délai de réception"**.
+- **Supprime** le message "Note :" et l'expander JSON (affichage allégé).
