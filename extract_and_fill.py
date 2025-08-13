@@ -355,6 +355,7 @@ def shade_header_row(table, fill_hex="EEF3FF"):
         shd.set(qn('w:color'), 'auto')
         shd.set(qn('w:fill'), fill_hex)
 
+
 def apply_column_widths_and_alignments(table):
     try:
         table.autofit = False
@@ -367,8 +368,15 @@ def apply_column_widths_and_alignments(table):
     if "Pos" in idx: widths_in[idx["Pos"]] = Inches(0.5)
     if "Désignation" in idx: widths_in[idx["Désignation"]] = Inches(4.7)
     if "Qté" in idx: widths_in[idx["Qté"]] = Inches(0.8)
-    for r in table.rows:
+
+    # Columns to center (header + body)
+    center_cols = {idx.get("Unité", -1), idx.get("Prix unit.", -1), idx.get("Px u. Net", -1)}
+    # Remove -1 if not present
+    center_cols = {c for c in center_cols if c is not None and c >= 0}
+
+    for r_i, r in enumerate(table.rows):
         for j, cell in enumerate(r.cells):
+            # Set widths
             if j in widths_in:
                 for tcPr in cell._tc.iter(qn('w:tcPr')):
                     tcW = tcPr.find(qn('w:tcW'))
@@ -377,21 +385,31 @@ def apply_column_widths_and_alignments(table):
                     tcW.set(qn('w:type'), 'dxa')
                     dxa = int(widths_in[j].inches * 1440)
                     tcW.set(qn('w:w'), str(dxa))
+
+            # Alignment rules
             for p in cell.paragraphs:
                 is_header = (r is table.rows[0])
                 if is_header:
-                    p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+                    # Header: center the three target columns; others left + bold
+                    if j in center_cols:
+                        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                    else:
+                        p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                     if p.runs: p.runs[0].bold = True
                 else:
                     if j in (idx.get("Pos", -1), idx.get("Référence", -1), idx.get("Désignation", -1)):
                         p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
                     elif j == idx.get("Qté", -1):
                         p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
+                    elif j in center_cols:
+                        p.alignment = WD_PARAGRAPH_ALIGNMENT.CENTER
                     else:
+                        # numeric cells -> right, else left
                         if re.match(r"^\s*[0-9'’.,]+\s*$", p.text):
                             p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
                         else:
                             p.alignment = WD_PARAGRAPH_ALIGNMENT.LEFT
+
 
 def insert_paragraph_after(paragraph, text=""):
     new_p = OxmlElement('w:p')

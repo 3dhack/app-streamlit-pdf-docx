@@ -7,3 +7,7 @@
 Fix28:
 - **Supprime l'export PDF** et le code associé (plus de docx2pdf/soffice/unoconv).
 - **Nettoyage des paragraphes vides après le tableau** : on garde **exactement 1 seul** retour à la ligne, les autres sont supprimés automatiquement.
+
+
+Fix29:
+- **Centrage** des colonnes **Unité**, **Prix unit.**, **Px u. Net** (en-tête et valeurs).
