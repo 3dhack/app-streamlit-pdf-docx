@@ -66,3 +66,10 @@ Fix41:
 - **Corrige le nettoyage au bon endroit** : supprime la **bordure basse de la dernière ligne de données** (celle avec les Pos), pas celle du total.
 - Conserve la **double ligne/underline** sous **Total TTC CHF** et son texte **en gras**.
 - Garde **1 seul retour à la ligne** après le tableau.
+
+
+Fix42:
+- Améliore l'affichage **"Champs détectés"** :
+  - tableau propre (2 colonnes **Champ / Valeur**), ordre des infos pertinent,
+  - expander pour afficher le **JSON brut** si besoin,
+  - note informative si le **Total TTC CHF** utilisé diffère du **Montant Total TTC CHF (PDF)**.

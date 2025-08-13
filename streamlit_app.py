@@ -61,11 +61,45 @@ if pdf_file and st.button("🔁 Réanalyser"):
     else:
         st.warning("Fournis le PDF et un modèle (ou `template.docx`).")
 
+
 fields = st.session_state.get("fields") or {}
 if (pdf_file or fields):
     if fields:
         st.subheader("Champs détectés")
-        st.write(fields)
+        import pandas as _pd
+
+        # Order keys for nicer reading
+        preferred_order = [
+            "N°commande fournisseur",
+            "Commande fournisseur",
+            "Notre référence",
+            "date du jour",
+            "Délai de réception",
+            "Délai de livraison",
+            "Total TTC CHF",
+            "Montant Total TTC CHF (PDF)",
+        ]
+        # Build ordered list
+        rows = []
+        for key in preferred_order:
+            if key in fields:
+                rows.append({"Champ": key, "Valeur": str(fields[key])})
+        for key, val in fields.items():
+            if key not in preferred_order:
+                rows.append({"Champ": key, "Valeur": str(val)})
+
+        df_fields = _pd.DataFrame(rows, columns=["Champ", "Valeur"])
+        st.dataframe(df_fields, use_container_width=True, hide_index=True)
+
+        # Hint if totals differ
+        pdf_ttc = fields.get("Montant Total TTC CHF (PDF)")
+        used_ttc = fields.get("Total TTC CHF")
+        if pdf_ttc and used_ttc and str(pdf_ttc) != str(used_ttc):
+            st.info(f"Note : le total affiché dans le document est basé sur **Total CHF** (→ « Total TTC CHF » = {used_ttc}). Le montant « Montant Total TTC CHF (PDF) » ({pdf_ttc}) reste indiqué pour référence.")
+
+        with st.expander("Voir le JSON brut"):
+            import json as _json
+            st.code(_json.dumps(fields, ensure_ascii=False, indent=2))
 
 items_df = st.session_state.get("items_df")
 if (pdf_file or items_df is not None):
