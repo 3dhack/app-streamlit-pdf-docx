@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix18
+# extract_and_fill.py — fix20 (rebuilt)
 import re
 import unicodedata
 from io import BytesIO
@@ -17,7 +17,6 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 DATE_RE = re.compile(r"\b([0-3]?\d)[./-]([01]?\d)[./-]([12]\d{3})\b")
-
 COLUMNS_TARGET = ["Pos", "Référence", "Désignation", "Unité", "Qté", "Prix unit.", "Px u. Net", "Total CHF", "TVA"]
 
 def today_ch() -> str:
@@ -31,9 +30,9 @@ def _insert_missing_spaces(text: str) -> str:
     text = re.sub(r"(\d)[A-Za-z]", lambda m: m.group(0)[0] + " " + m.group(0)[1:], text)
     return text
 
-def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]]:
+def extract_text_and_tables_from_pdf(file_like):
     texts = []
-    tables: List[pd.DataFrame] = []
+    tables = []
     with pdfplumber.open(file_like) as pdf:
         for page in pdf.pages:
             raw_text = page.extract_text() or ""
@@ -41,9 +40,8 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
             texts.append(raw_text)
             try:
                 for raw in page.extract_tables() or []:
-                    if not raw or len(raw) < 2:
-                        continue
-                    header = raw[0]; rows = raw[1:]
+                    if not raw or len(raw) < 2: continue
+                    header, rows = raw[0], raw[1:]
                     if not any(x for x in header): continue
                     df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
                     if df.shape[1] >= 3 and df.shape[0] >= 1:
@@ -53,7 +51,7 @@ def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]
             try:
                 raw_single = page.extract_table()
                 if raw_single and len(raw_single) > 1:
-                    header = raw_single[0]; rows = raw_single[1:]
+                    header, rows = raw_single[0], raw_single[1:]
                     if any(x for x in header):
                         df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
                         if df.shape[1] >= 3 and df.shape[0] >= 1:
@@ -74,18 +72,17 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
+    """Use 'Total CHF' for the total displayed under the table; keep 'Montant Total TTC CHF' only for reference."""
     fields: Dict[str, str] = {}
     raw = text.replace("\xa0", " ")
     norm = _strip_accents(raw).lower()
 
-    # CF uppercase
     m_norm = re.search(r"commande fournisseur n[°o]\s*([A-Za-z0-9\-_]+)", norm, flags=re.IGNORECASE)
     if m_norm:
         cf = m_norm.group(1).strip().upper()
         fields["N°commande fournisseur"] = cf
         fields["Commande fournisseur"] = cf
 
-    # Notre référence (trim before TVA tokens)
     m_line = re.search(r"(?i)(Notre\s+référence\s*:\s*)(.*)", raw)
     if m_line:
         after = m_line.group(2).strip()
@@ -99,14 +96,26 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         value = after[:cut_idx].strip(" -–—\t·:;") if cut_idx is not None else after.strip(" -–—\t·:;")
         fields["Notre référence"] = value[:60]
 
-    # Total TTC CHF
-    m = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
+    total_chf = None
+    m = re.search(r"(?i)Total\s+CHF\s*([0-9'’.,]+)", raw)
     if m:
-        fields["Total TTC CHF"] = m.group(2).strip()
+        total_chf = m.group(1).strip()
     else:
-        m = re.search(r"([0-9'’.,]+)\s*(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)", raw)
+        m = re.search(r"([0-9'’.,]+)\s*Total\s+CHF", raw, flags=re.IGNORECASE)
         if m:
-            fields["Total TTC CHF"] = m.group(1).strip()
+            total_chf = m.group(1).strip()
+
+    m_ttc = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
+    if m_ttc:
+        fields["Montant Total TTC CHF (PDF)"] = m_ttc.group(2).strip()
+    else:
+        m_ttc = re.search(r"([0-9'’.,]+)\s*(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)", raw)
+        if m_ttc:
+            fields["Montant Total TTC CHF (PDF)"] = m_ttc.group(1).strip()
+
+    if total_chf:
+        fields["Total TTC CHF"] = total_chf
+
     return fields
 
 def _parse_date_str(s: str) -> Optional[datetime]:
@@ -146,24 +155,29 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
         rf"(?:\s+(?P<tva>\d{{2,3}}))?\s*$",
         re.IGNORECASE
     )
-    stop_cues = ("total", "recapitulation", "code tva", "montant", "taux")
-    rows: List[Dict[str, str]] = []
-    current = None; started = False
+    stop_cues = ("recapitulation", "récapitulation", "code tva", "montant total", "total ttc", "montant", "taux")
+    rows = []
+    current = None
+
     for raw_ln in text.splitlines():
         ln = raw_ln.strip()
-        if not ln: continue
+        if not ln: 
+            continue
+        low = _strip_accents(ln).lower()
+
+        if any(low.startswith(c) for c in stop_cues):
+            break
+
         m = item_re.match(ln)
         if m:
             pos = m.group("pos")
             try:
                 if int(pos) % 10 != 0:
-                    if started: break
-                    else: continue
+                    continue
             except Exception:
-                if started: break
-                else: continue
-            started = True
-            if current: rows.append(current)
+                continue
+            if current:
+                rows.append(current); current = None
             gd = m.groupdict()
             current = {
                 "Pos": gd.get("pos",""),
@@ -177,45 +191,47 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
                 "TVA": gd.get("tva","") or "",
             }
             continue
-        if started and re.match(r"^\d", ln): break
-        low = _strip_accents(ln).lower()
-        if started and any(low.startswith(c) for c in stop_cues): break
-        if any(low.startswith(pref) for pref in ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")): 
+
+        if any(low.startswith(pref) for pref in ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")):
             continue
-        if started and current:
-            if not any(low.startswith(c) for c in stop_cues):
-                current["Désignation"] = (current["Désignation"] + " " + ln.strip()).strip()
-    if current: rows.append(current)
+
+        if current and not any(low.startswith(c) for c in stop_cues):
+            current["Désignation"] = (current["Désignation"] + " " + ln.strip()).strip()
+
+    if current:
+        rows.append(current)
+
     return pd.DataFrame(rows, columns=COLUMNS_TARGET)
 
-def truncate_after_items_block(df: pd.DataFrame) -> pd.DataFrame:
-    if df is None or df.empty: return df
-    keep = []; started = False
-    for _, r in df.iterrows():
-        first = ""
-        for v in r.tolist():
-            s = str(v).strip() if v is not None else ""
-            if s: first = s; break
-        if re.fullmatch(r"\d{1,4}", first):
-            try:
-                if int(first) % 10 == 0:
-                    keep.append(r); started = True; continue
-                else:
-                    if started: break
-                    else: continue
-            except Exception:
-                if started: break
-                else: continue
-        else:
-            if started: break
-            else: continue
-    if not keep: return df
-    return pd.DataFrame(keep, columns=df.columns).reset_index(drop=True)
+def combine_detected_tables(tables):
+    if not tables: return None
+    candidate_rows = []
+    for df in tables:
+        dfc = _clean_df(df)
+        cols_norm = [_strip_accents(str(c)).lower() for c in dfc.columns]
+        if cols_norm and ("pos" not in cols_norm):
+            first_col = dfc.columns[0]
+            if dfc[first_col].astype(str).str.fullmatch(r"\d{1,4}").fillna(False).any():
+                dfc = dfc.rename(columns={first_col: "Pos"})
+        if "Pos" in dfc.columns:
+            for _, r in dfc.iterrows():
+                pos = str(r["Pos"]).strip()
+                if pos.isdigit() and int(pos) % 10 == 0:
+                    candidate_rows.append(r)
+    if not candidate_rows:
+        return None
+    merged = pd.DataFrame(candidate_rows)
+    for col in COLUMNS_TARGET:
+        if col not in merged.columns:
+            merged[col] = ""
+    merged = merged[COLUMNS_TARGET]
+    return merged.reset_index(drop=True)
 
 def clean_items_df_keep_full(df: pd.DataFrame) -> pd.DataFrame:
-    df2 = truncate_after_items_block(df.copy())
+    if df is None or df.empty: 
+        return df
     filtered = []
-    for _, r in df2.iterrows():
+    for _, r in df.iterrows():
         first_non_empty = ""
         for v in r.tolist():
             s = str(v).strip() if v is not None else ""
@@ -223,11 +239,8 @@ def clean_items_df_keep_full(df: pd.DataFrame) -> pd.DataFrame:
         if first_non_empty.startswith("indice :") or first_non_empty.startswith("delai de reception :"):
             continue
         filtered.append(r)
-    new_df = pd.DataFrame(filtered, columns=df2.columns) if filtered else df2.iloc[0:0].copy()
-    keep_cols = []
-    for c in new_df.columns:
-        if _strip_accents(str(c)).strip().lower() == "tva": continue
-        keep_cols.append(c)
+    new_df = pd.DataFrame(filtered, columns=df.columns) if filtered else df.iloc[0:0].copy()
+    keep_cols = [c for c in new_df.columns if _strip_accents(str(c)).strip().lower() != "tva"]
     new_df = new_df[keep_cols] if keep_cols else new_df
     return new_df.reset_index(drop=True)
 
@@ -266,11 +279,9 @@ def compute_facture_suffix(fields: Dict[str, str]) -> Optional[str]:
     return None
 
 def set_facture_title(doc: Document, suffix: Optional[str]):
-    """Update any paragraph/header/footer starting with 'Facture' to 'Facture xxx' (bold 12pt)."""
     def set_para(p):
         txt = p.text.strip()
         if txt.startswith("Facture"):
-            # clear and re-add with formatting
             for r in p.runs[::-1]:
                 r.clear()
             p.text = ""
@@ -302,8 +313,6 @@ def _set_border(el, side, val='single', sz='8', space='0', color='auto'):
     border.set(qn('w:color'), color)
 
 def set_table_borders_horizontal_only(table):
-    """Keep outer borders + horizontal inner lines; remove vertical inner lines."""
-    # Table-level borders
     tbl = table._element
     tblPr = tbl.tblPr if tbl.tblPr is not None else OxmlElement('w:tblPr')
     tblBorders = tblPr.find(qn('w:tblBorders'))
@@ -314,10 +323,9 @@ def set_table_borders_horizontal_only(table):
     _set_border(tblBorders, 'bottom')
     _set_border(tblBorders, 'right')
     _set_border(tblBorders, 'insideH', val='single')
-    _set_border(tblBorders, 'insideV', val='nil')  # remove vertical inner
+    _set_border(tblBorders, 'insideV', val='nil')
     tbl.append(tblPr)
 
-    # Per-cell: top/bottom always; left on first col; right on last col; remove internal left/right
     n_cols = len(table.rows[0].cells) if table.rows else 0
     for r_idx, row in enumerate(table.rows):
         for c_idx, cell in enumerate(row.cells):
@@ -326,30 +334,13 @@ def set_table_borders_horizontal_only(table):
             tcBorders = tcPr.find(qn('w:tcBorders'))
             if tcBorders is None:
                 tcBorders = OxmlElement('w:tcBorders'); tcPr.append(tcBorders)
-
-            # top
-            if r_idx == 0:
-                _set_border(tcBorders, 'top', val='single')
-            else:
-                _set_border(tcBorders, 'top', val='single')
-            # bottom
-            if r_idx == len(table.rows)-1:
-                _set_border(tcBorders, 'bottom', val='single')
-            else:
-                _set_border(tcBorders, 'bottom', val='single')
-            # left/right
-            if c_idx == 0:
-                _set_border(tcBorders, 'left', val='single')
-            else:
-                _set_border(tcBorders, 'left', val='nil')
-            if c_idx == n_cols-1:
-                _set_border(tcBorders, 'right', val='single')
-            else:
-                _set_border(tcBorders, 'right', val='nil')
+            _set_border(tcBorders, 'top', val='single')
+            _set_border(tcBorders, 'bottom', val='single')
+            _set_border(tcBorders, 'left', val=('single' if c_idx == 0 else 'nil'))
+            _set_border(tcBorders, 'right', val=('single' if c_idx == n_cols-1 else 'nil'))
 
 def shade_header_row(table, fill_hex="EEF3FF"):
-    if not table.rows:
-        return
+    if not table.rows: return
     for cell in table.rows[0].cells:
         tcPr = cell._tc.get_or_add_tcPr()
         shd = tcPr.find(qn('w:shd'))
@@ -437,7 +428,6 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
     if df is None or df.empty: return
     df = df.copy(); df.columns = [str(c) for c in df.columns]
 
-    # 1) Create table at end
     tbl = doc.add_table(rows=1, cols=len(df.columns))
     hdr_cells = tbl.rows[0].cells
     for i, c in enumerate(df.columns):
@@ -450,36 +440,31 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
             for para in cells[i].paragraphs:
                 if para.runs: para.runs[0].font.size = Pt(10)
 
-    # Style: header shading + horizontal borders only + widths
     shade_header_row(tbl, fill_hex="EEF3FF")
     set_table_borders_horizontal_only(tbl)
     apply_column_widths_and_alignments(tbl)
     tbl.alignment = WD_TABLE_ALIGNMENT.LEFT
 
-    # 2) Find anchor and move the table below it, with exactly 2 blank lines before the table
     anchor = find_paragraph_anchor(doc)
     if anchor is not None:
         p1 = insert_paragraph_after(anchor, "")
         p2 = insert_paragraph_after(p1, "")
         p2._p.addnext(tbl._element)
 
-    # 3) Add "Total TTC CHF xxx" right after the table
     total_text = f"Total TTC CHF {total_ttc}" if total_ttc else "Total TTC CHF"
     total_para = insert_paragraph_after_element(tbl._element, text=total_text,
                                                align=WD_PARAGRAPH_ALIGNMENT.RIGHT,
                                                bold=True, font_size_pt=11)
 
-    # 4) Ensure exactly two blank lines after the total line
     b1 = insert_paragraph_after(total_para, "")
     b2 = insert_paragraph_after(b1, "")
     cleanup_extra_blank_paras(total_para, max_blank=2)
 
-def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[bytes, Dict[str, str], pd.DataFrame]:
+def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
     fields = parse_fields_from_text(text)
     fields["date du jour"] = today_ch()
 
-    # Délai de réception (max) from text -> also alias as Délai de livraison
     from_text = []
     norm = _strip_accents(text).lower().replace("\xa0"," ")
     for ln in [l.strip() for l in norm.splitlines() if l.strip()]:
@@ -496,15 +481,13 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
         fields["Délai de réception"] = max_dt
         fields["Délai de livraison"] = max_dt
 
-    # Items table
+    items_df = None
     if tables:
-        base_df = max(tables, key=lambda d: (d.shape[0], d.shape[1]))
-        items_df = clean_items_df_keep_full(base_df)
-    else:
+        items_df = combine_detected_tables(tables)
+    if items_df is None:
         items_df = reconstruct_items_from_text(text)
-        items_df = clean_items_df_keep_full(items_df)
+    items_df = clean_items_df_keep_full(items_df)
 
-    # Replace placeholders and then set "Facture xxx" title
     doc = Document(BytesIO(template_docx_bytes))
     replace_placeholders_everywhere(doc, fields)
     suffix = compute_facture_suffix(fields)
@@ -513,7 +496,7 @@ def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes) -> Tuple[b
     out = BytesIO(); doc.save(out); out.seek(0)
     return out.getvalue(), fields, items_df
 
-def build_final_doc(doc_bytes: bytes, items_df: pd.DataFrame, total_ttc: Optional[str]) -> bytes:
+def build_final_doc(doc_bytes: bytes, items_df: pd.DataFrame, total_ttc: Optional[str]):
     doc = Document(BytesIO(doc_bytes))
     insert_df_two_lines_below_anchor(doc, items_df, total_ttc or "")
     out = BytesIO(); doc.save(out); out.seek(0)
