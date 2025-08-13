@@ -24,3 +24,18 @@ Fix31:
 
 Fix32:
 - Remplace `st.experimental_rerun()` par `st.rerun()` (évite l'`AttributeError` avec les versions récentes de Streamlit).
+
+
+Fix33:
+- Le bouton **"Réinitialiser"** réinitialise désormais **visuellement** les uploaders (PDF et DOCX) :
+  - utilisation de clés dynamiques (`pdf_uploader_<n>`, `docx_uploader_<n>`),
+  - incrément des clés à chaque reset pour vider/rafraîchir les widgets.
+
+
+Fix34:
+- Le bouton **"🔁 Réanalyser"** est désormais **affiché uniquement** lorsqu'un **PDF est chargé** (sinon il est caché).
+
+
+Fix35:
+- Le bouton **"🧾 Générer le DOCX"** est **caché** tant que l'analyse n'est pas prête (PDF + modèle disponibles).
+- Un message d'info s'affiche à la place pour guider l'utilisateur.
