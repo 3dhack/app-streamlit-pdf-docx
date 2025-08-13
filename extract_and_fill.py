@@ -1,4 +1,4 @@
-# extract_and_fill.py — fix20 (rebuilt)
+# extract_and_fill.py — fix21
 import re
 import unicodedata
 from io import BytesIO
@@ -17,6 +17,7 @@ from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
 DATE_RE = re.compile(r"\b([0-3]?\d)[./-]([01]?\d)[./-]([12]\d{3})\b")
+
 COLUMNS_TARGET = ["Pos", "Référence", "Désignation", "Unité", "Qté", "Prix unit.", "Px u. Net", "Total CHF", "TVA"]
 
 def today_ch() -> str:
@@ -30,9 +31,9 @@ def _insert_missing_spaces(text: str) -> str:
     text = re.sub(r"(\d)[A-Za-z]", lambda m: m.group(0)[0] + " " + m.group(0)[1:], text)
     return text
 
-def extract_text_and_tables_from_pdf(file_like):
+def extract_text_and_tables_from_pdf(file_like) -> Tuple[str, List[pd.DataFrame]]:
     texts = []
-    tables = []
+    tables: List[pd.DataFrame] = []
     with pdfplumber.open(file_like) as pdf:
         for page in pdf.pages:
             raw_text = page.extract_text() or ""
@@ -40,8 +41,9 @@ def extract_text_and_tables_from_pdf(file_like):
             texts.append(raw_text)
             try:
                 for raw in page.extract_tables() or []:
-                    if not raw or len(raw) < 2: continue
-                    header, rows = raw[0], raw[1:]
+                    if not raw or len(raw) < 2:
+                        continue
+                    header = raw[0]; rows = raw[1:]
                     if not any(x for x in header): continue
                     df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
                     if df.shape[1] >= 3 and df.shape[0] >= 1:
@@ -51,7 +53,7 @@ def extract_text_and_tables_from_pdf(file_like):
             try:
                 raw_single = page.extract_table()
                 if raw_single and len(raw_single) > 1:
-                    header, rows = raw_single[0], raw_single[1:]
+                    header = raw_single[0]; rows = raw_single[1:]
                     if any(x for x in header):
                         df = pd.DataFrame(rows, columns=[(h or "").strip() for h in header])
                         if df.shape[1] >= 3 and df.shape[0] >= 1:
@@ -72,17 +74,19 @@ def _clean_df(df: pd.DataFrame) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 def parse_fields_from_text(text: str) -> Dict[str, str]:
-    """Use 'Total CHF' for the total displayed under the table; keep 'Montant Total TTC CHF' only for reference."""
+    """Parse key fields. 'Total TTC CHF' displayed under table uses the 'Total CHF' amount from the PDF."""
     fields: Dict[str, str] = {}
     raw = text.replace("\xa0", " ")
     norm = _strip_accents(raw).lower()
 
+    # CF uppercase
     m_norm = re.search(r"commande fournisseur n[°o]\s*([A-Za-z0-9\-_]+)", norm, flags=re.IGNORECASE)
     if m_norm:
         cf = m_norm.group(1).strip().upper()
         fields["N°commande fournisseur"] = cf
         fields["Commande fournisseur"] = cf
 
+    # Notre référence (trim before TVA tokens)
     m_line = re.search(r"(?i)(Notre\s+référence\s*:\s*)(.*)", raw)
     if m_line:
         after = m_line.group(2).strip()
@@ -96,6 +100,7 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         value = after[:cut_idx].strip(" -–—\t·:;") if cut_idx is not None else after.strip(" -–—\t·:;")
         fields["Notre référence"] = value[:60]
 
+    # Total CHF (HT) — this is the value we will use for "Total TTC CHF" display as per requirement
     total_chf = None
     m = re.search(r"(?i)Total\s+CHF\s*([0-9'’.,]+)", raw)
     if m:
@@ -105,6 +110,7 @@ def parse_fields_from_text(text: str) -> Dict[str, str]:
         if m:
             total_chf = m.group(1).strip()
 
+    # Keep "Montant Total TTC CHF" just for reference if present
     m_ttc = re.search(r"(?i)(Montant\s+Total\s+TTC\s+CHF|Total\s+TTC\s+CHF)\s*([0-9'’.,]+)", raw)
     if m_ttc:
         fields["Montant Total TTC CHF (PDF)"] = m_ttc.group(2).strip()
@@ -141,9 +147,17 @@ def latest_receipt_date_from_text(text: str) -> Optional[str]:
     return max(dates).strftime("%d.%m.%Y")
 
 def reconstruct_items_from_text(text: str) -> pd.DataFrame:
+    """
+    Robust reconstruction:
+    - Detect item start only when Pos is multiple of 10.
+    - Accumulate across as few lines as necessary until a complete item is parsed.
+    - The moment we capture 'Total CHF' (i.e., total price), we finalize the item and stop accumulating.
+      => avoids spillover of text from next page.
+    """
     unit_words = r"(PC|PCE|PCS|PIECE|PIECES|UN|UNITES?|KG|G|MG|L|ML|M|MM|CM)"
     money = r"[0-9'’.,]+"
-    item_re = re.compile(
+
+    full_item_re = re.compile(
         rf"^\s*(?P<pos>\d{{1,4}})\s+"
         rf"(?P<ref>\d{{3,}})\s+"
         rf"(?P<designation>.+?)\s+"
@@ -155,56 +169,90 @@ def reconstruct_items_from_text(text: str) -> pd.DataFrame:
         rf"(?:\s+(?P<tva>\d{{2,3}}))?\s*$",
         re.IGNORECASE
     )
-    stop_cues = ("recapitulation", "récapitulation", "code tva", "montant total", "total ttc", "montant", "taux")
-    rows = []
-    current = None
+
+    start_re = re.compile(r"^\s*(?P<pos>\d{1,4})\s+(?P<ref>\d{3,})\b")
+
+    drop_prefixes = (
+        "tarif douanier", "pays d'origine", "indice :", "delai de reception :",
+        "récapitulation", "recapitulation", "code tva", "montant total", "total ttc", "montant", "taux",
+    )
+
+    rows: List[Dict[str, str]] = []
+
+    buffer = ""
+    buffering = False
+
+    def try_flush(buf: str):
+        m = full_item_re.match(buf.strip())
+        if not m:
+            return False
+        gd = m.groupdict()
+        try:
+            if int(gd["pos"]) % 10 != 0:
+                return False
+        except Exception:
+            return False
+        rows.append({
+            "Pos": gd.get("pos",""),
+            "Référence": gd.get("ref",""),
+            "Désignation": (gd.get("designation","") or "").strip(),
+            "Unité": gd.get("unite","").upper(),
+            "Qté": gd.get("qte",""),
+            "Prix unit.": gd.get("pu",""),
+            "Px u. Net": gd.get("pxu",""),
+            "Total CHF": gd.get("total",""),
+            "TVA": gd.get("tva","") or "",
+        })
+        return True
 
     for raw_ln in text.splitlines():
         ln = raw_ln.strip()
-        if not ln: 
+        if not ln:
             continue
         low = _strip_accents(ln).lower()
 
-        if any(low.startswith(c) for c in stop_cues):
+        if any(low.startswith(p) for p in drop_prefixes):
+            if buffering:
+                buffering = False
+                buffer = ""
             break
 
-        m = item_re.match(ln)
-        if m:
-            pos = m.group("pos")
+        # Full item on a single line
+        if full_item_re.match(ln):
+            try_flush(ln)
+            buffering = False
+            buffer = ""
+            continue
+
+        # Start of item?
+        m_start = start_re.match(ln)
+        if m_start:
             try:
-                if int(pos) % 10 != 0:
+                pos_val = int(m_start.group("pos"))
+                if pos_val % 10 == 0:
+                    buffering = True
+                    buffer = ln
+                    continue
+                else:
                     continue
             except Exception:
                 continue
-            if current:
-                rows.append(current); current = None
-            gd = m.groupdict()
-            current = {
-                "Pos": gd.get("pos",""),
-                "Référence": gd.get("ref",""),
-                "Désignation": (gd.get("designation","") or "").strip(),
-                "Unité": gd.get("unite","").upper(),
-                "Qté": gd.get("qte",""),
-                "Prix unit.": gd.get("pu",""),
-                "Px u. Net": gd.get("pxu",""),
-                "Total CHF": gd.get("total",""),
-                "TVA": gd.get("tva","") or "",
-            }
-            continue
 
-        if any(low.startswith(pref) for pref in ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")):
-            continue
-
-        if current and not any(low.startswith(c) for c in stop_cues):
-            current["Désignation"] = (current["Désignation"] + " " + ln.strip()).strip()
-
-    if current:
-        rows.append(current)
+        # If buffering, add lines until full match is achieved (then finalize)
+        if buffering:
+            if any(low.startswith(p) for p in ("tarif douanier", "pays d'origine", "indice :", "delai de reception :")):
+                continue
+            buffer = (buffer + " " + ln).strip()
+            if try_flush(buffer):
+                buffering = False
+                buffer = ""
+                continue
 
     return pd.DataFrame(rows, columns=COLUMNS_TARGET)
 
-def combine_detected_tables(tables):
-    if not tables: return None
+def combine_detected_tables(tables: List[pd.DataFrame]) -> Optional[pd.DataFrame]:
+    if not tables:
+        return None
     candidate_rows = []
     for df in tables:
         dfc = _clean_df(df)
@@ -403,7 +451,7 @@ def insert_paragraph_after_element(elm, text="", align=None, bold=False, font_si
     para = Paragraph(new_p, elm.getparent())
     run = para.add_run(text)
     if bold: run.bold = True
-    if font_size_pt: run.font.size = Pt(font_size_pt)
+    if font_size_pt: run.font.size = Pt(11)
     if align is not None: para.alignment = align
     return para
 

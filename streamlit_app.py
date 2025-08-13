@@ -1,30 +1,25 @@
-# streamlit_app.py — fix20 (rebuilt)
+# streamlit_app.py — fix21
 import streamlit as st
 from pathlib import Path
 from extract_and_fill import process_pdf_to_docx, build_final_doc
 
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Fix20 : Total basé sur 'Total CHF' + analyse multi-pages des Pos (10/20/30…).")
+st.caption("Fix21 : reconstruction des lignes stoppée au 'Total CHF' de chaque article (anti-spillover).")
 
-# Template handling (same as fix19): try repo template, allow override
 TEMPLATE_PATH = Path(__file__).parent / "template.docx"
 tmpl_bytes = TEMPLATE_PATH.read_bytes() if TEMPLATE_PATH.exists() else None
 
 with st.sidebar:
-    st.header("Options")
-    override = st.checkbox("Remplacer le modèle embarqué (uploader un .docx)", value=False)
-    st.markdown("---")
     st.header("Étapes")
     st.markdown("1. Uploader le **PDF**")
     if tmpl_bytes is None:
-        st.markdown("2. Uploader le **modèle .docx** *(aucun `template.docx` dans le repo)*")
+        st.markdown("2. Uploader le **modèle .docx** (ou place `template.docx` dans le repo)")
     st.markdown("3. Générer le **DOCX**")
 
-if override or tmpl_bytes is None:
+if tmpl_bytes is None:
     up = st.file_uploader("Modèle Word (.docx)", type=["docx"])
-    if up:
-        tmpl_bytes = up.read()
+    if up: tmpl_bytes = up.read()
 
 pdf_file = st.file_uploader("PDF de la commande", type=["pdf"])
 
