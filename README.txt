@@ -11,3 +11,8 @@ Fix28:
 
 Fix29:
 - **Centrage** des colonnes **Unité**, **Prix unit.**, **Px u. Net** (en-tête et valeurs).
+
+
+Fix30:
+- **Suppression du gras** sur toutes les **lignes de données** du tableau (bas du tableau), toutes colonnes.
+- En-têtes **restent en gras** ; ligne de **Total** reste **gras + souligné double**.
