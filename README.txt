@@ -49,3 +49,8 @@ Fix36:
 
 Fix37:
 - **Centrage vertical** du texte dans **toutes les cellules** du tableau (en-tête, lignes de données et total).
+
+
+Fix38:
+- **Centrage vertical renforcé** (ajout d'un setter XML `w:vAlign` = `center`) sur toutes les cellules, y compris après fusion.
+- **Suppression du gras** sur la **ligne de total** (conservée en **double souligné** uniquement), pour éviter la “ligne en gras” en bas du tableau.

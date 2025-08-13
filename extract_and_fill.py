@@ -375,11 +375,8 @@ def apply_column_widths_and_alignments(table):
 
     for r in table.rows:
         for j, cell in enumerate(r.cells):
-            # Vertical center for every cell
-            try:
-                cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-            except Exception:
-                pass
+            # Vertical center for every cell (robust)
+            set_cell_vertical_center(cell)
             # Set widths
             if j in widths_in:
                 for tcPr in cell._tc.iter(qn('w:tcPr')):
@@ -417,6 +414,25 @@ def apply_column_widths_and_alignments(table):
                     if p.runs:
                         p.runs[0].bold = False
 
+
+
+def set_cell_vertical_center(cell):
+    """Force vertical centering via both python-docx property and low-level XML."""
+    try:
+        cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+    except Exception:
+        pass
+    try:
+        tc = cell._tc
+        tcPr = tc.get_or_add_tcPr()
+        vAlign = tcPr.find(qn('w:vAlign'))
+        if vAlign is None:
+            from docx.oxml import OxmlElement
+            vAlign = OxmlElement('w:vAlign')
+            tcPr.append(vAlign)
+        vAlign.set(qn('w:val'), 'center')
+    except Exception:
+        pass
 
 def insert_paragraph_after(paragraph, text=""):
     new_p = OxmlElement('w:p')
@@ -461,10 +477,11 @@ def add_total_row_to_table(table, label: str, amount: str):
         amount_cell.text = amount_text
 
     for c in (label_cell, amount_cell):
+        set_cell_vertical_center(c)
         for p in c.paragraphs:
             p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
             if p.runs:
-                p.runs[0].bold = True
+                p.runs[0].bold = False  # remove bold on total row per request
                 p.runs[0].font.underline = WD_UNDERLINE.DOUBLE
 
     # Double top border on total row
@@ -479,10 +496,7 @@ def add_total_row_to_table(table, label: str, amount: str):
         el.set(qn('w:space'), '0')
 
     for c in row.cells:
-        try:
-            c.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-        except Exception:
-            pass
+        set_cell_vertical_center(c)
         tc = c._tc
         tcPr = tc.get_or_add_tcPr()
         tcBorders = tcPr.find(qn('w:tcBorders'))
