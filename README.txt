@@ -54,3 +54,9 @@ Fix37:
 Fix38:
 - **Centrage vertical renforcé** (ajout d'un setter XML `w:vAlign` = `center`) sur toutes les cellules, y compris après fusion.
 - **Suppression du gras** sur la **ligne de total** (conservée en **double souligné** uniquement), pour éviter la “ligne en gras” en bas du tableau.
+
+
+Fix39:
+- **Retire toute double ligne** au niveau global du tableau (les bordures standard restent simples).
+- **Conserve une ligne double uniquement sous la ligne de total** (bordure supérieure double du dernier rang).
+- **Remet le texte en gras** sur la ligne **Total TTC CHF** (libellé et montant), en plus du **double souligné**.

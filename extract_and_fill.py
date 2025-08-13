@@ -481,7 +481,7 @@ def add_total_row_to_table(table, label: str, amount: str):
         for p in c.paragraphs:
             p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
             if p.runs:
-                p.runs[0].bold = False  # remove bold on total row per request
+                p.runs[0].bold = True  # restore bold on total row
                 p.runs[0].font.underline = WD_UNDERLINE.DOUBLE
 
     # Double top border on total row
