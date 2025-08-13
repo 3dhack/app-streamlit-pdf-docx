@@ -319,7 +319,7 @@ def set_facture_title(doc: Document, suffix: Optional[str]):
             p.text = ""
             run = p.add_run(f"Facture {suffix}" if suffix else "Facture")
             run.bold = True
-            run.font.size = Pt(12)
+            run.font.size = Pt(14)
     for p in doc.paragraphs:
         set_para(p)
     for section in doc.sections:
