@@ -63,7 +63,7 @@ def convert_docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes | None:
 
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 st.title("PDF → DOCX : Remplissage automatique")
-st.caption("Fix24b : total intégré dans le tableau (ligne fusionnée, gras, double souligné, bordure supérieure double).")
+
 
 TEMPLATE_PATH = Path(__file__).parent / "template.docx"
 tmpl_bytes = TEMPLATE_PATH.read_bytes() if TEMPLATE_PATH.exists() else None
