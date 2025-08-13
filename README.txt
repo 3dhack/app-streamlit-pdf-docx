@@ -20,3 +20,7 @@ Fix30:
 
 Fix31:
 - Ajoute un bouton **"🔄 Réinitialiser"** qui efface l'état (fields/items_df/doc temp) et relance l'app proprement.
+
+
+Fix32:
+- Remplace `st.experimental_rerun()` par `st.rerun()` (évite l'`AttributeError` avec les versions récentes de Streamlit).

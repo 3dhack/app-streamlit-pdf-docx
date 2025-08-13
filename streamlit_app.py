@@ -11,7 +11,7 @@ if st.button("🔄 Réinitialiser"):
     for key in ["fields", "items_df", "doc_with_placeholders"]:
         if key in st.session_state:
             del st.session_state[key]
-    st.experimental_rerun()
+    st.rerun()
 # --- Fin Réinitialiser ---
 
 
