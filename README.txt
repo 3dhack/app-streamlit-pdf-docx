@@ -60,3 +60,8 @@ Fix39:
 - **Retire toute double ligne** au niveau global du tableau (les bordures standard restent simples).
 - **Conserve une ligne double uniquement sous la ligne de total** (bordure supérieure double du dernier rang).
 - **Remet le texte en gras** sur la ligne **Total TTC CHF** (libellé et montant), en plus du **double souligné**.
+
+
+Fix40:
+- **Supprime toute ligne vide sous le tableau** : aucun paragraphe ajouté après le tableau, nettoyage configuré pour garder **0** blancs.
+- **Retire la bordure inférieure du tableau** (bottom = nil) et **supprime la bordure basse** de la **dernière rangée** (total) : ainsi, la **seule ligne visible** en bas est la **double ligne** du total.
