@@ -9,5 +9,7 @@ Fix22:
 - Corrige l'arrêt prématuré après la Pos 10 : les lignes 'Tarif douanier', 'Pays d'origine', 'Indice :', 'Délai de réception :' sont ignorées (et ne stoppent plus l'analyse).
 - S'arrête uniquement sur 'Récapitulation / Montant total / Total TTC / Code TVA / Taux'.
 
-Fix23:
-- Ajoute un double soulignement (WD_UNDERLINE.DOUBLE) à la ligne 'Total TTC CHF xxx.xx' dans le document Word.
+Fix24:
+- **Total TTC CHF** est désormais **intégré dans le tableau** comme **dernière ligne**,
+  avec cellules fusionnées (libellé à gauche, montant dans la colonne Total CHF),
+  **aligné à droite, gras, souligné double**, et **bordure supérieure double** pour marquer le total.

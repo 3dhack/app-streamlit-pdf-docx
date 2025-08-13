@@ -1,4 +1,3 @@
-from docx.enum.text import WD_UNDERLINE
 # extract_and_fill.py — fix21
 import re
 import unicodedata
@@ -11,7 +10,7 @@ import pdfplumber
 import pandas as pd
 from docx import Document
 from docx.shared import Pt, Inches
-from docx.enum.text import WD_PARAGRAPH_ALIGNMENT
+from docx.enum.text import WD_PARAGRAPH_ALIGNMENT, WD_UNDERLINE
 from docx.enum.table import WD_TABLE_ALIGNMENT
 
 from docx.oxml import OxmlElement
@@ -481,6 +480,72 @@ def cleanup_extra_blank_paras(start_para, max_blank=2):
             break
         nxt = nxt.getnext()
 
+
+def add_total_row_to_table(table, label: str, amount: str):
+    """
+    Append a 'total' row to the table:
+    - Merge all cells from first to penultimate into one label cell.
+    - Put amount into the last cell (Total CHF column).
+    - Right-align, bold, and double-underline both label and amount.
+    - Add a top DOUBLE border across the total row.
+    """
+    n_cols = len(table.rows[0].cells) if table.rows else 0
+    if n_cols == 0:
+        return
+    row = table.add_row()
+    cells = row.cells
+    # Merge label cells (0..n-2) into cells[0]
+    if n_cols >= 2:
+        merged = cells[0]
+        for j in range(1, n_cols-1):
+            merged = merged.merge(cells[j])
+        label_cell = merged
+        amount_cell = cells[-1]
+    else:
+        label_cell = cells[0]
+        amount_cell = cells[0]
+
+    # Set texts
+    label_text = label.strip()
+    amount_text = (amount or "").strip()
+    # If amount is empty, avoid trailing space
+    if amount_text:
+        label_cell.text = label_text
+        amount_cell.text = amount_text
+    else:
+        label_cell.text = label_text
+
+    # Style paragraphs: right align, bold, double underline
+    for c in (label_cell, amount_cell):
+        for p in c.paragraphs:
+            p.alignment = WD_PARAGRAPH_ALIGNMENT.RIGHT
+            if p.runs:
+                p.runs[0].bold = True
+                p.runs[0].font.underline = WD_UNDERLINE.DOUBLE
+
+    # Add top DOUBLE border across the total row
+    from docx.oxml import OxmlElement
+    from docx.oxml.ns import qn
+    def _set_border(tcBorders, side, val='single', sz='12', color='auto'):
+        el = tcBorders.find(qn(f'w:{side}'))
+        if el is None:
+            el = OxmlElement(f'w:{side}')
+            tcBorders.append(el)
+        el.set(qn('w:val'), val)
+        el.set(qn('w:sz'), sz)
+        el.set(qn('w:color'), color)
+        el.set(qn('w:space'), '0')
+
+    for idx, c in enumerate(row.cells):
+        tc = c._tc
+        tcPr = tc.get_or_add_tcPr()
+        tcBorders = tcPr.find(qn('w:tcBorders'))
+        if tcBorders is None:
+            tcBorders = OxmlElement('w:tcBorders')
+            tcPr.append(tcBorders)
+        _set_border(tcBorders, 'top', val='double', sz='18')  # strong double top border
+        # keep existing left/right rules from table (outer frame only)
+        # bottom stays as defined by table-level borders
 def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc: Optional[str] = ""):
     if df is None or df.empty: return
     df = df.copy(); df.columns = [str(c) for c in df.columns]
@@ -509,7 +574,9 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
         p2._p.addnext(tbl._element)
 
     total_text = f"Total TTC CHF {total_ttc}" if total_ttc else "Total TTC CHF"
-    total_para = insert_paragraph_after_element(tbl._element, text=total_text,
+    add_total_row_to_table(tbl, label='Total TTC CHF', amount=total_ttc or '')
+    # (total inside table, not as paragraph)
+    #total_para = insert_paragraph_after_element(tbl._element, text=total_text,
                                                align=WD_PARAGRAPH_ALIGNMENT.RIGHT,
                                                bold=True, font_size_pt=11)
 
