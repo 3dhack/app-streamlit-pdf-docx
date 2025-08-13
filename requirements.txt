@@ -4,4 +4,3 @@ pandas>=2.1
 python-docx>=0.8.11
 
 # Optional for PDF export (only if available on the host)
-docx2pdf>=0.1.8

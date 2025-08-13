@@ -468,6 +468,29 @@ def find_paragraph_anchor(doc: Document) -> Optional[object]:
         if target_re.search(txt): return p
     return None
 
+
+def cleanup_extra_blank_paras(start_para, max_blank=1):
+    """
+    Remove excess blank paragraphs immediately following `start_para`.
+    Keeps at most `max_blank` empty paragraphs.
+    """
+    blanks = 0
+    nxt = start_para._p.getnext()
+    while nxt is not None and nxt.tag == qn('w:p'):
+        # Collect text in this paragraph
+        texts = "".join(t.text or "" for t in nxt.iter(qn('w:t'))).strip()
+        if texts == "":
+            blanks += 1
+            if blanks > max_blank:
+                parent = nxt.getparent()
+                to_remove = nxt
+                nxt = nxt.getnext()
+                parent.remove(to_remove)
+                continue
+        else:
+            # Stop at first non-empty paragraph
+            break
+        nxt = nxt.getnext()
 def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc: Optional[str] = ""):
     if df is None or df.empty: return
     df = df.copy(); df.columns = [str(c) for c in df.columns]
@@ -502,7 +525,8 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
     add_total_row_to_table(tbl, label="Total TTC CHF", amount=total_ttc or "")
 
     # EXACTLY ONE blank line after table
-    insert_paragraph_after_element(tbl._element, text="")
+    p_after = insert_paragraph_after_element(tbl._element, text="")
+    cleanup_extra_blank_paras(p_after, max_blank=1)
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))
