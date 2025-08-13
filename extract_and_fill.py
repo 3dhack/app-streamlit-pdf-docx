@@ -1,3 +1,4 @@
+from docx.enum.text import WD_UNDERLINE
 # extract_and_fill.py — fix21
 import re
 import unicodedata
