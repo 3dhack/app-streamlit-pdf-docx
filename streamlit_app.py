@@ -3,6 +3,64 @@ import streamlit as st
 from pathlib import Path
 from extract_and_fill import process_pdf_to_docx, build_final_doc
 
+import tempfile, subprocess, sys, platform
+
+def convert_docx_bytes_to_pdf_bytes(docx_bytes: bytes) -> bytes | None:
+    """
+    Try multiple strategies to convert DOCX -> PDF on Linux/Cloud:
+    1) LibreOffice ('soffice --headless') if available
+    2) unoconv if available
+    3) docx2pdf (works mainly on Windows/Mac)
+    Returns PDF bytes or None if all strategies fail.
+    """
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            docx_path = Path(tmpdir) / "out.docx"
+            pdf_path  = Path(tmpdir) / "out.pdf"
+            with open(docx_path, "wb") as f:
+                f.write(docx_bytes)
+
+            # Strategy 1: soffice (LibreOffice)
+            try:
+                subprocess.run(
+                    ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(Path(tmpdir)), str(docx_path)],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60
+                )
+                if pdf_path.exists():
+                    return pdf_path.read_bytes()
+            except Exception:
+                pass
+
+            # Strategy 2: unoconv
+            try:
+                subprocess.run(
+                    ["unoconv", "-f", "pdf", str(docx_path)],
+                    check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60
+                )
+                if pdf_path.exists():
+                    return pdf_path.read_bytes()
+                # unoconv may name the file with same base
+                for p in Path(tmpdir).glob("*.pdf"):
+                    return p.read_bytes()
+            except Exception:
+                pass
+
+            # Strategy 3: docx2pdf (best on Windows/Mac)
+            try:
+                from docx2pdf import convert as docx2pdf_convert
+                # On non-Windows/macOS this may fail if MS Word is not present
+                out_tmp_pdf = Path(tmpdir) / "out_docx2pdf.pdf"
+                docx2pdf_convert(str(docx_path), str(out_tmp_pdf))
+                if out_tmp_pdf.exists():
+                    return out_tmp_pdf.read_bytes()
+            except Exception:
+                pass
+
+            return None
+    except Exception:
+        return None
+
+
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 st.title("PDF → DOCX : Remplissage automatique")
 st.caption("Fix24b : total intégré dans le tableau (ligne fusionnée, gras, double souligné, bordure supérieure double).")
@@ -52,7 +110,7 @@ if items_df is not None and not items_df.empty:
 else:
     st.info("Le tableau sera reconstruit si aucune table fiable n'est détectée.")
 
-if st.button("🧾 Générer le DOCX final", disabled=not (tmpl_bytes and st.session_state.get("doc_with_placeholders"))):
+if st.button("🧾 Générer le DOCX/PDF", disabled=not (tmpl_bytes and st.session_state.get("doc_with_placeholders"))):
     base_doc_bytes = st.session_state["doc_with_placeholders"]
     total_ttc = (st.session_state["fields"] or {}).get("Total TTC CHF", "")
     final_doc = build_final_doc(base_doc_bytes, st.session_state["items_df"], total_ttc)
