@@ -85,3 +85,8 @@ Fix45:
 - **Colonne "Champ" encore réduite** (width=80).
 - **Masque** les lignes **"N° de Commande fournisseur"**, **"N°commande fournisseur"** et **"Délai de réception"**.
 - **Supprime** le message "Note :" et l'expander JSON (affichage allégé).
+
+
+Fix46:
+- **Garde** la ligne "Commande fournisseur" dans l'affichage éditable.
+- Les autres suppressions de Fix45 restent actives (masque "N° de Commande fournisseur", "N°commande fournisseur" et "Délai de réception").

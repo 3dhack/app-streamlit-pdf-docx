@@ -82,7 +82,6 @@ if (pdf_file or fields):
 
         # Filter out unwanted rows (support both key variants)
         hide_keys = {
-            "Commande fournisseur",
             "N° de Commande fournisseur",
             "N°commande fournisseur",
             "Délai de réception",
