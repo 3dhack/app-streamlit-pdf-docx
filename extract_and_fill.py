@@ -325,7 +325,7 @@ def set_table_borders_horizontal_only(table):
         tblBorders = OxmlElement('w:tblBorders'); tblPr.append(tblBorders)
     _set_border(tblBorders, 'top')
     _set_border(tblBorders, 'left')
-    _set_border(tblBorders, 'bottom', val='nil')
+    _set_border(tblBorders, 'bottom')
     _set_border(tblBorders, 'right')
     _set_border(tblBorders, 'insideH', val='single')
     _set_border(tblBorders, 'insideV', val='nil')
@@ -512,7 +512,7 @@ def find_paragraph_anchor(doc: Document) -> Optional[object]:
     return None
 
 
-def cleanup_extra_blank_paras(start_para, max_blank=0):
+def cleanup_extra_blank_paras(start_para, max_blank=1):
     """
     Remove excess blank paragraphs immediately following `start_para`.
     Keeps at most `max_blank` empty paragraphs.
@@ -536,29 +536,31 @@ def cleanup_extra_blank_paras(start_para, max_blank=0):
         nxt = nxt.getnext()
 
 
-def remove_bottom_border_last_row(table):
-    """Remove bottom border on the last row cells to avoid an extra line beneath the total row."""
-    if not table.rows:
-        return
-    last_row = table.rows[-1]
-    for cell in last_row.cells:
-        tc = cell._tc
-        tcPr = tc.get_or_add_tcPr()
-        tcBorders = tcPr.find(qn('w:tcBorders'))
-        if tcBorders is None:
-            from docx.oxml import OxmlElement
-            tcBorders = OxmlElement('w:tcBorders')
-            tcPr.append(tcBorders)
-        # set bottom to nil
-        el = tcBorders.find(qn('w:bottom'))
-        if el is None:
-            from docx.oxml import OxmlElement
-            el = OxmlElement('w:bottom')
-            tcBorders.append(el)
-        el.set(qn('w:val'), 'nil')
-        el.set(qn('w:sz'), '0')
-        el.set(qn('w:space'), '0')
-        el.set(qn('w:color'), 'auto')
+def remove_bottom_border_last_data_row(table):
+    """Remove the bottom border on the row BEFORE the total row to avoid an extra line between body and total."""
+    try:
+        if len(table.rows) < 2:
+            return
+        last_data_row = table.rows[-2]  # the row before the total row
+        for cell in last_data_row.cells:
+            tc = cell._tc
+            tcPr = tc.get_or_add_tcPr()
+            tcBorders = tcPr.find(qn('w:tcBorders'))
+            if tcBorders is None:
+                from docx.oxml import OxmlElement
+                tcBorders = OxmlElement('w:tcBorders')
+                tcPr.append(tcBorders)
+            bottom = tcBorders.find(qn('w:bottom'))
+            if bottom is None:
+                from docx.oxml import OxmlElement
+                bottom = OxmlElement('w:bottom')
+                tcBorders.append(bottom)
+            bottom.set(qn('w:val'), 'nil')
+            bottom.set(qn('w:sz'), '0')
+            bottom.set(qn('w:space'), '0')
+            bottom.set(qn('w:color'), 'auto')
+    except Exception:
+        pass
 
 def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc: Optional[str] = ""):
     if df is None or df.empty: return
@@ -592,10 +594,11 @@ def insert_df_two_lines_below_anchor(doc: Document, df: pd.DataFrame, total_ttc:
 
     # Add total row inside the table
     add_total_row_to_table(tbl, label="Total TTC CHF", amount=total_ttc or "")
-    remove_bottom_border_last_row(tbl)
+    remove_bottom_border_last_data_row(tbl)
 
     # EXACTLY ONE blank line after table
-    pass  # no blank paragraph after table
+    p_after = insert_paragraph_after_element(tbl._element, text="")
+    cleanup_extra_blank_paras(p_after, max_blank=1)
 
 def process_pdf_to_docx(pdf_bytes: bytes, template_docx_bytes: bytes):
     text, tables = extract_text_and_tables_from_pdf(BytesIO(pdf_bytes))

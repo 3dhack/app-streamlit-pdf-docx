@@ -62,6 +62,7 @@ Fix39:
 - **Remet le texte en gras** sur la ligne **Total TTC CHF** (libellé et montant), en plus du **double souligné**.
 
 
-Fix40:
-- **Supprime toute ligne vide sous le tableau** : aucun paragraphe ajouté après le tableau, nettoyage configuré pour garder **0** blancs.
-- **Retire la bordure inférieure du tableau** (bottom = nil) et **supprime la bordure basse** de la **dernière rangée** (total) : ainsi, la **seule ligne visible** en bas est la **double ligne** du total.
+Fix41:
+- **Corrige le nettoyage au bon endroit** : supprime la **bordure basse de la dernière ligne de données** (celle avec les Pos), pas celle du total.
+- Conserve la **double ligne/underline** sous **Total TTC CHF** et son texte **en gras**.
+- Garde **1 seul retour à la ligne** après le tableau.
