@@ -6,6 +6,15 @@ from extract_and_fill import process_pdf_to_docx, build_final_doc
 st.set_page_config(page_title="PDF → DOCX (Commande fournisseur)", layout="wide")
 st.title("PDF → DOCX : Remplissage automatique")
 
+# --- Bouton Réinitialiser ---
+if st.button("🔄 Réinitialiser"):
+    for key in ["fields", "items_df", "doc_with_placeholders"]:
+        if key in st.session_state:
+            del st.session_state[key]
+    st.experimental_rerun()
+# --- Fin Réinitialiser ---
+
+
 TEMPLATE_PATH = Path(__file__).parent / "template.docx"
 tmpl_bytes = TEMPLATE_PATH.read_bytes() if TEMPLATE_PATH.exists() else None
 

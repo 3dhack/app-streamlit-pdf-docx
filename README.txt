@@ -16,3 +16,7 @@ Fix29:
 Fix30:
 - **Suppression du gras** sur toutes les **lignes de données** du tableau (bas du tableau), toutes colonnes.
 - En-têtes **restent en gras** ; ligne de **Total** reste **gras + souligné double**.
+
+
+Fix31:
+- Ajoute un bouton **"🔄 Réinitialiser"** qui efface l'état (fields/items_df/doc temp) et relance l'app proprement.
