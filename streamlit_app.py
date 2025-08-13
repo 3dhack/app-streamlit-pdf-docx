@@ -62,16 +62,18 @@ if pdf_file and st.button("🔁 Réanalyser"):
         st.warning("Fournis le PDF et un modèle (ou `template.docx`).")
 
 fields = st.session_state.get("fields") or {}
-if fields:
-    st.subheader("Champs détectés")
-    st.write(fields)
+if (pdf_file or fields):
+    if fields:
+        st.subheader("Champs détectés")
+        st.write(fields)
 
-st.subheader("Aperçu du tableau")
 items_df = st.session_state.get("items_df")
-if items_df is not None and not items_df.empty:
-    st.dataframe(items_df, use_container_width=True)
-else:
-    st.info("Le tableau sera reconstruit si aucune table fiable n'est détectée.")
+if (pdf_file or items_df is not None):
+    st.subheader("Aperçu du tableau")
+    if items_df is not None and not items_df.empty:
+        st.dataframe(items_df, use_container_width=True)
+    else:
+        st.info("Le tableau sera reconstruit si aucune table fiable n'est détectée.")
 
 
 ready_to_generate = bool(tmpl_bytes and st.session_state.get("doc_with_placeholders"))
@@ -86,5 +88,5 @@ if ready_to_generate:
 
         st.success("DOCX généré !")
         st.download_button("🟦 Télécharger le DOCX", data=final_doc, file_name=filename, mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
-else:
+elif pdf_file:
     st.info("Importe un PDF (et un modèle si nécessaire) puis lance l'analyse pour afficher le bouton de génération.")

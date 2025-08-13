@@ -39,3 +39,9 @@ Fix34:
 Fix35:
 - Le bouton **"🧾 Générer le DOCX"** est **caché** tant que l'analyse n'est pas prête (PDF + modèle disponibles).
 - Un message d'info s'affiche à la place pour guider l'utilisateur.
+
+
+Fix36:
+- Masque **toutes les lignes d'information** tant qu'aucun PDF n'est uploadé :
+  - plus d'"Aperçu du tableau" ni "Le tableau sera reconstruit..." avant upload,
+  - le message d'aide pour la génération n'apparaît que si un PDF est présent.
